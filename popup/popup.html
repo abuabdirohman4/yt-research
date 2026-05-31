@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YT Research</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body data-theme="dark">
+<div class="popup">
+
+    <!-- Header -->
+    <div class="header">
+        <svg class="yt-logo" width="28" height="20" viewBox="0 0 28 20" fill="none">
+            <path d="M27.42 3.12a3.5 3.5 0 0 0-2.47-2.48C22.77 0 14 0 14 0S5.23 0 3.05.64A3.5 3.5 0 0 0 .58 3.12 36.4 36.4 0 0 0 0 10a36.4 36.4 0 0 0 .58 6.88 3.5 3.5 0 0 0 2.47 2.48C5.23 20 14 20 14 20s8.77 0 10.95-.64a3.5 3.5 0 0 0 2.47-2.48A36.4 36.4 0 0 0 28 10a36.4 36.4 0 0 0-.58-6.88Z" fill="#FF0000"/>
+            <path d="M11.2 14.29 18.5 10l-7.3-4.29v8.58Z" fill="#fff"/>
+        </svg>
+        <div class="header-text">
+            <span class="header-title">YT Research</span>
+            <span class="header-sub">Channel intelligence tool</span>
+        </div>
+        <button class="theme-toggle" id="themeToggle" title="Toggle theme">☀</button>
+    </div>
+
+    <!-- Mode Tabs -->
+    <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="research" id="tabResearch">Channel Research</button>
+        <button class="mode-tab" data-mode="deepdive" id="tabDeepdive">Competitor Deep Dive</button>
+    </div>
+
+    <!-- Status Card (Ready / Done / Error) -->
+    <div class="card-wrap" id="statusCardWrap">
+        <div class="card status-card" id="statusCard">
+            <div class="status-icon-circle" id="statusIconCircle">
+                <svg width="18" height="18" viewBox="0 0 24 24" id="statusIconSvg">
+                    <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17Z" fill="currentColor"/>
+                </svg>
+                <span class="status-dot" id="statusDot"></span>
+            </div>
+            <div class="status-text-group">
+                <div class="status-label" id="statusLabel">Ready</div>
+                <div class="status-sub" id="statusSub">Open a YouTube channel page to begin</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Card (Scraping) -->
+    <div class="card-wrap" id="progressCardWrap" style="display:none">
+        <div class="card progress-card">
+            <div class="progress-top-row">
+                <div class="progress-left">
+                    <span class="spinner"></span>
+                    <span class="progress-count" id="progressCount">Phase 1/3</span>
+                </div>
+                <span class="eta-pill" id="etaPill" style="display:none"></span>
+                <span class="eta-estimating" id="etaEstimating">working…</span>
+            </div>
+            <div class="progress-title" id="progressTitle"></div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progressFill" style="width:0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Card (Channel Research only, after done) -->
+    <div class="results-wrap" id="resultsWrap" style="display:none">
+        <div class="results-card" id="resultsCard">
+            <div id="resultsContent"></div>
+            <button class="results-copy-btn" id="resultsCopyBtn">
+                <svg width="12" height="12" viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1Zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H8V7h11v14Z" fill="currentColor"/></svg>
+                Copy results
+            </button>
+        </div>
+    </div>
+
+    <!-- Settings (Deep Dive only) -->
+    <div class="settings-wrap" id="settingsWrap" style="display:none">
+        <div class="settings-row settings-accordion-header" id="deepdiveAccordionHeader">
+            <span class="settings-label">Scrape</span>
+            <span class="accordion-summary" id="deepdiveSummary">4 selected</span>
+            <span class="accordion-arrow" id="deepdiveArrow">&#9660;</span>
+        </div>
+        <div class="columns-list" id="deepdiveOptionsList">
+            <label class="column-toggle-label">
+                <input type="checkbox" value="channelInfo" id="optChannelInfo" checked> Channel info
+            </label>
+            <label class="column-toggle-label">
+                <input type="checkbox" value="videoTitles" id="optVideoTitles" checked> All video titles
+            </label>
+            <label class="column-toggle-label">
+                <input type="checkbox" value="videoMeta" id="optVideoMeta" checked> Views &amp; dates
+            </label>
+            <label class="column-toggle-label">
+                <input type="checkbox" value="videoDescriptions" id="optVideoDescriptions"> Video descriptions
+            </label>
+        </div>
+        <div class="description-warning" id="descriptionWarning" style="display:none">
+            ⚠ Scraping descriptions visits each video page — may take several minutes.
+        </div>
+    </div>
+
+    <!-- Buttons -->
+    <div class="btn-group">
+        <button class="btn btn-primary" id="startButton">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5Z" fill="#fff"/></svg>
+            Start research
+        </button>
+        <button class="btn btn-danger" id="stopButton" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M6 6h12v12H6V6Z" fill="#fff"/></svg>
+            Stop
+        </button>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <svg width="14" height="14" viewBox="0 0 24 24" class="footer-icon">
+            <path d="M11 7h2v2h-2V7Zm0 4h2v6h-2v-6Zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" fill="currentColor"/>
+        </svg>
+        <span id="footerText">Open a YouTube channel's Videos tab, then click Start.</span>
+    </div>
+
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
