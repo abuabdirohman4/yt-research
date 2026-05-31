@@ -63,7 +63,7 @@ function parseVideoItems(limit) {
     for (const item of items) {
         if (limit && results.length >= limit) break;
 
-        const titleEl = item.querySelector('#video-title');
+        const titleEl = item.querySelector('#video-title-link, #video-title, a#video-title, yt-formatted-string#video-title');
         const title = titleEl ? titleEl.textContent.trim() : '';
         if (!title) continue;
 
@@ -71,11 +71,12 @@ function parseVideoItems(limit) {
         const views = metaSpans[0] ? metaSpans[0].textContent.trim() : '';
         const date = metaSpans[1] ? metaSpans[1].textContent.trim() : '';
 
-        const linkEl = item.querySelector('a#thumbnail') || item.querySelector('a[href*="/watch?v="]');
+        const linkEl = item.querySelector('a#video-title-link') || item.querySelector('a#thumbnail') || item.querySelector('a[href*="/watch?v="]');
         const videoUrl = linkEl ? linkEl.href : '';
 
         results.push({ title, views, date, videoUrl });
     }
+    console.log(`[YTResearch] parseVideoItems: ${items.length} items found, ${results.length} with titles`);
     return results;
 }
 
@@ -90,33 +91,136 @@ async function scrapeChannelInfo() {
     }
     await sleep(1000);
 
-    const nameEl = document.querySelector('#channel-name yt-formatted-string')
+    // Channel name from header or page title
+    const nameEl = document.querySelector('yt-formatted-string#text.ytd-channel-name')
+        || document.querySelector('#channel-name yt-formatted-string')
         || document.querySelector('ytd-channel-name yt-formatted-string')
-        || document.querySelector('#channel-name');
-    const channelName = nameEl ? nameEl.textContent.trim() : '';
+        || document.querySelector('#channel-name')
+        || document.querySelector('ytd-engagement-panel-title-header-renderer #title-text')
+        || document.querySelector('h1[class*="channel"] yt-formatted-string')
+        || document.querySelector('meta[property="og:title"]');
+    let channelName = nameEl ? (nameEl.content || nameEl.textContent || '').trim() : '';
+    // fallback: page title before " - YouTube"
+    if (!channelName) {
+        const titleMatch = document.title.match(/^(.+?)\s*[-–|]/);
+        if (titleMatch) channelName = titleMatch[1].trim();
+    }
 
+    // Subscribers from header
     const subEl = document.querySelector('#subscriber-count');
     const subscribers = subEl ? subEl.textContent.trim() : '';
 
-    // Total video count from the tab or about section
-    const videosTabEl = document.querySelector('yt-tab-shape[tab-identifier="FEchannelVideos"] .tab-title')
-        || document.querySelector('[title="Videos"]');
-    let totalVideos = '';
-    if (videosTabEl) {
-        const m = videosTabEl.textContent.match(/(\d[\d,]*)/);
-        if (m) totalVideos = m[1].replace(/,/g, '');
+    // Click "...more" to open the About modal
+    const moreBtn = document.querySelector('button.ytTruncatedTextAbsoluteButton')
+        || document.querySelector('#channel-description-container #expand')
+        || document.querySelector('#description-container #expand')
+        || document.querySelector('tp-yt-paper-button#expand');
+    console.log('[YTResearch] More button found:', !!moreBtn);
+    if (moreBtn) {
+        moreBtn.click();
+        await sleep(2000);
     }
 
-    // Description — may need to expand
-    const descExpandBtn = document.querySelector('#description-container #expand');
-    if (descExpandBtn) descExpandBtn.click();
-    await sleep(300);
+    // Wait for ytd-about-channel-renderer to appear in DOM
+    let modal = null;
+    try {
+        modal = await waitForElement('ytd-about-channel-renderer', 5000);
+    } catch (e) {
+        console.warn('[YTResearch] ytd-about-channel-renderer not found after wait');
+        modal = document.querySelector('ytd-about-channel-renderer');
+    }
+
+    if (!modal) {
+        console.warn('[YTResearch] Modal not found — falling back to page scrape');
+        return scrapeChannelInfoFallback(channelName, subscribers);
+    }
+    console.log('[YTResearch] Modal found: ytd-about-channel-renderer');
+
+    // Description: flatten newlines for CSV readability
+    const descEl = modal.querySelector('#description-container')
+        || modal.querySelector('yt-attributed-string[id="description-container"]');
+    const rawDesc = descEl ? descEl.innerText.trim() : '';
+    const channelDescription = rawDesc.replace(/\n\n+/g, ' | ').replace(/\n/g, ' ');
+
+    // Channel URL: <a> tag inside modal
+    const urlEl = modal.querySelector('a[href*="youtube.com/@"], a[href*="youtube.com/channel/"]');
+    const channelUrl = urlEl ? urlEl.href.replace('http://', 'https://') : '';
+
+    // Parse table rows: each row has icon + td with value
+    // Rows contain: country, joined date, subscribers, videos, views
+    let country = '';
+    let joinedDate = '';
+    let totalVideos = '';
+    let totalViews = '';
+    let subscribersFromModal = '';
+
+    const rows = modal.querySelectorAll('tr.description-item');
+    for (const row of rows) {
+        const iconEl = row.querySelector('yt-icon');
+        const icon = iconEl ? iconEl.getAttribute('icon') : '';
+        const tds = row.querySelectorAll('td');
+        const valueTd = tds[1];
+        if (!valueTd) continue;
+        const value = valueTd.textContent.trim();
+        if (!value) continue;
+
+        if (icon === 'privacy_public' || icon === 'globe') {
+            country = value;
+        } else if (icon === 'info_outline' || icon === 'info') {
+            joinedDate = value.replace(/^Joined\s+/i, '').trim();
+        } else if (icon === 'person_radar' || icon === 'person') {
+            subscribersFromModal = value;
+        } else if (icon === 'my_videos' || icon === 'video_library') {
+            const m = value.match(/([\d,]+)/);
+            if (m) totalVideos = m[1].replace(/,/g, '');
+        } else if (icon === 'trending_up') {
+            totalViews = value;
+        }
+    }
+
+    // Close modal
+    const closeBtn = modal.closest('tp-yt-paper-dialog')?.querySelector('button[aria-label="Close"], [dialog-dismiss]');
+    if (closeBtn) { closeBtn.click(); await sleep(300); }
+
+    return {
+        channelName,
+        subscribers: subscribersFromModal || subscribers,
+        totalVideos,
+        totalViews,
+        channelUrl,
+        country,
+        joinedDate,
+        channelDescription
+    };
+}
+
+async function scrapeChannelInfoFallback(channelName, subscribers) {
+    // No modal — expand description in-place and scrape what's available
+    const expandBtn = document.querySelector('#description-container #expand');
+    if (expandBtn) { expandBtn.click(); await sleep(400); }
 
     const descEl = document.querySelector('#description yt-formatted-string')
         || document.querySelector('#channel-description-container yt-formatted-string');
     const channelDescription = descEl ? descEl.innerText.trim() : '';
 
-    return { channelName, subscribers, totalVideos, channelDescription };
+    // Total videos from tab label
+    const videosTabEl = document.querySelector('yt-tab-shape[tab-identifier="FEchannelVideos"] .tab-title');
+    let totalVideos = '';
+    if (videosTabEl) {
+        const m = videosTabEl.textContent.match(/([\d,]+)/);
+        if (m) totalVideos = m[1].replace(/,/g, '');
+    }
+
+    return {
+        channelName,
+        subscribers,
+        totalVideos,
+        totalViews: '',
+        channelUrl: window.location.href,
+        country: '',
+        joinedDate: '',
+        channelDescription
+    };
 }
 
 // ===================== CHANNEL RESEARCH SCRAPER =====================
@@ -237,10 +341,10 @@ async function runDeepDive(deepdiveOptions) {
     if (phase === 'channel-home' || (deepdiveOptions.channelInfo && pageType === 'channel-home' && !phase)) {
         sendProgress('Step 1', 'Scraping channel info…', 10);
         const channelInfo = await scrapeChannelInfo();
-        await chrome.storage.local.set({ deepdiveChannelInfo: channelInfo, scrapePhase: 'videos' });
-        const channelBase = state.channelBase || getChannelBaseUrl();
-        sendProgress('Step 2', 'Loading videos page…', 15);
-        chrome.runtime.sendMessage({ action: 'navigateTo', url: channelBase + '/videos' });
+        console.log('[YTResearch] Channel info scraped:', JSON.stringify(channelInfo));
+        await chrome.storage.local.set({ deepdiveChannelInfo: channelInfo, scrapePhase: 'done' });
+        // TEMP: finish here to verify channel info before proceeding to video scraping
+        await finishDeepDive(deepdiveOptions, { ...state, deepdiveChannelInfo: channelInfo, deepdiveVideoList: [] });
         return;
     }
 
@@ -343,16 +447,35 @@ async function finishDeepDive(deepdiveOptions, state) {
     const videoList = state.deepdiveVideoList || [];
     const channelInfo = state.deepdiveChannelInfo || {};
 
-    const data = videoList.map(v => ({
+    let data = videoList.map(v => ({
         channelName: channelInfo.channelName || '',
         subscribers: channelInfo.subscribers || '',
         totalVideos: channelInfo.totalVideos || '',
+        channelUrl: channelInfo.channelUrl || '',
+        country: channelInfo.country || '',
+        joinedDate: channelInfo.joinedDate || '',
+        totalViews: channelInfo.totalViews || '',
         channelDescription: channelInfo.channelDescription || '',
         title: v.title || '',
         views: v.views || '',
         date: v.date || '',
         description: v.description || ''
     }));
+
+    // If no videos but have channel info, still export a row with channel data only
+    if (data.length === 0 && channelInfo.channelName) {
+        data = [{
+            channelName: channelInfo.channelName || '',
+            subscribers: channelInfo.subscribers || '',
+            totalVideos: channelInfo.totalVideos || '',
+            totalViews: channelInfo.totalViews || '',
+            channelUrl: channelInfo.channelUrl || '',
+            country: channelInfo.country || '',
+            joinedDate: channelInfo.joinedDate || '',
+            channelDescription: channelInfo.channelDescription || '',
+            title: '', views: '', date: '', description: ''
+        }];
+    }
 
     await chrome.storage.local.set({ deepdiveData: data, scrapePhase: null });
     sendProgress('Done', `Collected ${data.length} videos`, 100);
@@ -362,6 +485,11 @@ async function finishDeepDive(deepdiveOptions, state) {
 // ===================== MAIN ENTRY =====================
 
 async function runScraping(mode, deepdiveOptions) {
+    if (window.ytResearchScraping) {
+        console.warn('[YTResearch] runScraping called while already running, ignoring');
+        return;
+    }
+    window.ytResearchScraping = true;
     const pageType = getPageType();
     console.log(`[YTResearch] runScraping mode=${mode} page=${pageType}`);
 
@@ -385,11 +513,14 @@ async function runScraping(mode, deepdiveOptions) {
 if (!window.ytResearchLoaded) {
     window.ytResearchLoaded = true;
     window.ytResearchStopRequested = false;
+    window.ytResearchScraping = false;
+    let isMessageDriven = false;
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('[YTResearch] Message:', request.action);
 
         if (request.action === 'startScraping') {
+            isMessageDriven = true;
             window.ytResearchStopRequested = false;
             runScraping(request.mode, request.deepdiveOptions);
             sendResponse({ status: 'started' });
@@ -403,6 +534,7 @@ if (!window.ytResearchLoaded) {
 
     // Auto-continue after navigation (same pattern as yt-analytic-scrape)
     chrome.storage.local.get(['isScraping', 'mode', 'scrapePhase', 'deepdiveOptions', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'channelBase', 'researchLatest', 'researchPopular'], (state) => {
+        if (isMessageDriven) { console.log('[YTResearch] Message-driven flow active, skipping auto-continue'); return; }
         const pageType = getPageType();
         if (!state.isScraping) return;
         if (pageType === 'other') return;

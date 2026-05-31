@@ -8,16 +8,22 @@ const setScrapingState = async (isScraping, status, extra) => {
 };
 
 function injectToTab(tabId, command) {
-    chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['scripts/content.js']
-    }, () => {
-        if (chrome.runtime.lastError) {
-            console.error(`[Background] Injection failed: ${chrome.runtime.lastError.message}`);
-            setScrapingState(false, 'Injection failed.');
-            return;
-        }
-        chrome.tabs.sendMessage(tabId, command);
+    // Try sending to existing content script first
+    chrome.tabs.sendMessage(tabId, command, (response) => {
+        if (!chrome.runtime.lastError) return; // success
+        // Content script not ready — inject then send
+        console.log('[Background] Content script not found, injecting...');
+        chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['scripts/content.js']
+        }, () => {
+            if (chrome.runtime.lastError) {
+                console.error(`[Background] Injection failed: ${chrome.runtime.lastError.message}`);
+                setScrapingState(false, 'Injection failed.');
+                return;
+            }
+            chrome.tabs.sendMessage(tabId, command);
+        });
     });
 }
 
@@ -32,6 +38,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return;
             }
             chrome.storage.local.set({
+                isScraping: true,
                 scrapingTabId: tabId,
                 mode: request.mode,
                 deepdiveOptions: request.deepdiveOptions || {},
@@ -112,7 +119,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 function generateDeepDiveCSV(data, opts) {
     const headers = [];
-    if (opts.channelInfo) headers.push('Channel Name', 'Subscribers', 'Total Videos', 'Channel Description');
+    if (opts.channelInfo) headers.push(
+        'Channel Name', 'Subscribers', 'Total Videos', 'Total Views',
+        'Channel URL', 'Country', 'Joined Date', 'Channel Description'
+    );
     headers.push('Video Title');
     if (opts.videoMeta) headers.push('Views', 'Upload Date');
     if (opts.videoDescriptions) headers.push('Description');
@@ -129,7 +139,10 @@ function generateDeepDiveCSV(data, opts) {
     const rows = data.map(row => {
         const cells = [];
         if (opts.channelInfo) {
-            cells.push(escape(row.channelName), escape(row.subscribers), escape(row.totalVideos), escape(row.channelDescription));
+            cells.push(
+                escape(row.channelName), escape(row.subscribers), escape(row.totalVideos), escape(row.totalViews),
+                escape(row.channelUrl), escape(row.country), escape(row.joinedDate), escape(row.channelDescription)
+            );
         }
         cells.push(escape(row.title));
         if (opts.videoMeta) cells.push(escape(row.views), escape(row.date));
