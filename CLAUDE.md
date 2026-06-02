@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Chrome MV3 extension for researching YouTube channels. Two modes:
 - **Channel Research** — quick overview of a channel's latest/popular/oldest videos, displayed in popup
-- **Competitor Deep Dive** — full scrape: channel info → per-video data (title, views, date, likes, comments, description, "How this was made"), exported as 1–2 CSV files
+- **Competitor Deep Dive** — full scrape: channel info + images → per-video data (title, views, date, likes, comments, description, transcript, "How this was made") + thumbnails, exported as 1–2 CSV files + downloaded images
 
 No build system. No package manager. No tests. All files are plain JS/HTML/CSS loaded directly by Chrome.
 
@@ -30,7 +30,7 @@ popup/ ←→ background.js (service worker) ←→ content.js (injected into Yo
 4. Background handles `navigateTo` via `chrome.tabs.update()` — triggers page load, content script auto-continues via storage state check
 5. On `scrapingJobDone`, background reads storage and triggers `chrome.downloads.download()` for CSV(s)
 
-**State persistence** (`chrome.storage.local`): All scraping state is persisted so navigation between YouTube pages doesn't lose context. Key fields: `isScraping`, `scrapePhase`, `mode`, `deepdiveOptions`, `videoFilter`, `scrapingTabId`, `deepdiveChannelInfo`, `deepdiveVideoList`, `deepdiveVideoIndex`, `channelBase`.
+**State persistence** (`chrome.storage.local`): All scraping state is persisted so navigation between YouTube pages doesn't lose context. Key fields: `isScraping`, `scrapePhase`, `mode`, `deepdiveOptions`, `videoFilter`, `scrapingTabId`, `deepdiveChannelInfo`, `deepdiveVideoList`, `deepdiveVideoIndex`, `channelBase`, `videoFinishTimes`, `lastEtaSeconds`.
 
 ## Multi-Phase Navigation Pattern
 
@@ -40,7 +40,7 @@ Both modes navigate across multiple YouTube pages. Each page load re-injects con
 1. `null` + not on channel-home → navigate to channel-home
 2. `channel-home` → scrape channel info via `scrapeChannelInfo()` → navigate to `/videos`
 3. `videos` → scroll-collect all video URLs → navigate to first video
-4. `video-detail` → scrape each video page one-by-one (title, views, date, likes, comments, description, how-this-was-made) → navigate to next
+4. `video-detail` → scrape each video page one-by-one (title, views, date, likes, comments, description, transcript, how-this-was-made) → navigate to next
 
 **Research phases:**
 1. `null` → scrape 5 latest → navigate to `?sort=p`
@@ -71,6 +71,11 @@ YouTube UI changes frequently. Current selectors (as of 2026):
 | How This Was Made | `how-this-was-made-section-view-model .ytwHowThisWasMadeSectionViewModelBodyHeader` |
 | About modal | `ytd-about-channel-renderer` (opened via `button.ytTruncatedTextAbsoluteButton`) |
 | About modal rows | `tr.description-item` — icon attribute identifies field type |
+| Channel avatar | `img.ytSpecAvatarShapeImage` |
+| Channel banner | `yt-image-banner-view-model img` |
+| Transcript button | `button[aria-label="Show transcript"]` |
+| Transcript panel | `yt-section-list-renderer[data-target-id="PAmodern_transcript_view"]` |
+| Transcript segment | `transcript-segment-view-model` → `.ytwTranscriptSegmentViewModelTimestamp` + `span[role="text"]` |
 
 ## Number Formatting
 
@@ -78,16 +83,31 @@ YouTube UI changes frequently. Current selectors (as of 2026):
 
 ## CSV Output
 
-- **Channel info** → `yt-channel-info_<timestamp>.csv` (1 row)
-- **Video data** → `yt-video-data_<timestamp>.csv` (1 row per video)
+- **Channel info** → `yt-channel-info_<timestamp>.csv` (1 row) — columns: Channel Name, Subscribers, Total Videos, Total Views, Channel URL, Country, Joined Date, Channel Description
+- **Video data** → `yt-video-data_<timestamp>.csv` (1 row per video) — columns: Video Title, Description, Hashtags, Views, Upload Date, Likes, Comments, How This Was Made, Transcript
 - Description text: newlines flattened — `\n\n+` → ` | `, `\n` → ` `
+- Transcript format: `[0:03] text [0:10] text ...` — all segments joined with space
 - CSV escaping: values containing `,`, `"`, or `\n` are wrapped in double-quotes with internal `"` doubled
+
+## Downloaded Files
+
+- **Channel avatar** → `channel-images/{channelName}_avatar.jpg`
+- **Channel banner** → `channel-images/{channelName}_banner.jpg` (skipped if channel has no banner)
+- **Video thumbnails** → `thumbnails/{channelName}_{NNN}.jpg` — oldest video = `001`, newest = N
 
 ## Deep Dive Options
 
 Stored in `deepdiveOptions` object:
 - `channelInfo` (bool) — scrape channel-home, export channel_info.csv
-- `videoData` (bool) — open each video, export video_data.csv
-- `videoDescriptions` (bool) — include description column in video_data.csv (slower)
+- `channelImages` (bool) — download avatar + banner to `channel-images/` (requires channel-home visit)
+- `videoData` (bool) — open each video, export video_data.csv (includes transcript automatically)
+- `thumbnails` (bool) — download video thumbnails to `thumbnails/` (from /videos page, no per-video visit needed)
+- `videoDescriptions` (bool) — always true, kept for compatibility
+
+`channelInfo` and `channelImages` both trigger navigation to channel-home. `videoData` and `thumbnails` both trigger /videos scroll phase.
+
+## ETA Calculation
+
+`videoFinishTimes` — array of `Date.now()` timestamps, one per completed video. After 2+ completions, background.js averages the intervals and multiplies by `videosLeft` to get `etaSeconds`. Stored as `lastEtaSeconds` so popup doesn't revert to "working…" between video navigations.
 
 Video filter stored in `videoFilter`: `{ mode: 'all' | 'count' | 'date', count?, direction?: 'latest'|'oldest', from?, to? }`

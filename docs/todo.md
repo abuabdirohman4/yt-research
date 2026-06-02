@@ -12,6 +12,6 @@ Videos Info
 - [x] Date
 - [x] Views
 - [x] How this was made (https://www.youtube.com/watch?v=X4FYMM-4tm4)
-- [ ] Trascript
+- [x] Trascript
 - [x] Like
 - [x] Comment

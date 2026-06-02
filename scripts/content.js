@@ -97,8 +97,8 @@ function waitForElement(selector, timeout = 15000) {
     });
 }
 
-function sendProgress(countText, phase, pct) {
-    chrome.runtime.sendMessage({ action: 'updateProgress', countText, phase, pct });
+function sendProgress(countText, phase, pct, videosLeft) {
+    chrome.runtime.sendMessage({ action: 'updateProgress', countText, phase, pct, videosLeft: videosLeft ?? null });
 }
 
 // ===================== VIDEO ITEM PARSER =====================
@@ -299,6 +299,32 @@ async function scrapeChannelInfoFallback(channelName, subscribers) {
         avatarUrl: '',
         bannerUrl: ''
     };
+}
+
+// ===================== TRANSCRIPT SCRAPER =====================
+
+async function scrapeTranscript() {
+    const btn = document.querySelector('button[aria-label="Show transcript"]');
+    if (!btn) return '';
+    btn.click();
+    try {
+        await waitForElement('yt-section-list-renderer[data-target-id="PAmodern_transcript_view"]', 8000);
+    } catch (e) {
+        return '';
+    }
+    await sleep(1000);
+    const segments = document.querySelectorAll(
+        'yt-section-list-renderer[data-target-id="PAmodern_transcript_view"] transcript-segment-view-model'
+    );
+    if (!segments.length) return '';
+    const parts = [];
+    for (const seg of segments) {
+        const ts = seg.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent?.trim() || '';
+        const text = seg.querySelector('span[role="text"]')?.textContent?.trim() || '';
+        if (ts && text) parts.push(`[${ts}] ${text}`);
+        else if (text) parts.push(text);
+    }
+    return parts.join(' ');
 }
 
 // ===================== CHANNEL RESEARCH SCRAPER =====================
@@ -539,7 +565,7 @@ async function runDeepDive(deepdiveOptions) {
         const idx = state.deepdiveVideoIndex || 0;
         const total = videoList.length;
 
-        sendProgress(`Video ${idx + 1}/${total}`, 'Scraping video data…', 62 + Math.round((idx / total) * 35));
+        sendProgress(`Video ${idx + 1}/${total}`, 'Scraping video data…', Math.round(((idx + 1) / total) * 100), total - idx - 1);
         await sleep(3000);
 
         // Scroll to top to ensure #info and title are visible/rendered
@@ -608,15 +634,21 @@ async function runDeepDive(deepdiveOptions) {
             ? (howEl.querySelector('.ytwHowThisWasMadeSectionViewModelBodyHeader')?.textContent?.trim() || 'Yes')
             : '';
 
-        videoList[idx] = { ...videoList[idx], title: exactTitle, views: exactViews, date: exactDate, hashtags: exactHashtags, description, likes, comments, howThisWasMade };
+        // Transcript
+        const transcript = await scrapeTranscript();
+
+        videoList[idx] = { ...videoList[idx], title: exactTitle, views: exactViews, date: exactDate, hashtags: exactHashtags, description, likes, comments, howThisWasMade, transcript };
 
         const nextIdx = idx + 1;
+        const videosLeft = total - nextIdx;
+
         if (nextIdx >= total || window.ytResearchStopRequested) {
             await chrome.storage.local.set({ deepdiveVideoList: videoList, scrapePhase: 'done' });
             await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: videoList });
         } else {
             await chrome.storage.local.set({ deepdiveVideoList: videoList, deepdiveVideoIndex: nextIdx });
-            sendProgress(`Video ${nextIdx + 1}/${total}`, 'Loading next video…', 62 + Math.round((nextIdx / total) * 35));
+            // videoCompleted=true triggers ETA timestamp recording; same message updates progress
+            chrome.runtime.sendMessage({ action: 'updateProgress', countText: `Video ${nextIdx + 1}/${total}`, phase: 'Loading next video…', pct: Math.round(((nextIdx) / total) * 100), videoCompleted: true, videosLeft });
             await sleep(800);
             chrome.runtime.sendMessage({ action: 'navigateTo', url: videoList[nextIdx].videoUrl });
         }

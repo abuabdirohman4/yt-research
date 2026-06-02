@@ -46,7 +46,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 researchResult: null,
                 deepdiveData: [],
                 lastProgress: null,
-                scrapePhase: null
+                scrapePhase: null,
+                videoFinishTimes: [],
+                lastEtaSeconds: null
             });
             setScrapingState(true, 'Starting...');
             injectToTab(tabId, request);
@@ -66,13 +68,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     else if (request.action === 'updateProgress') {
-        const progressData = {
-            countText: request.countText,
-            phase: request.phase,
-            pct: request.pct
-        };
-        chrome.storage.local.set({ lastProgress: progressData });
-        chrome.runtime.sendMessage({ action: 'updateProgress', ...progressData }).catch(() => {});
+        chrome.storage.local.get(['videoFinishTimes', 'lastEtaSeconds'], (r) => {
+            let etaSeconds = null;
+            if (request.videoCompleted) {
+                const times = r.videoFinishTimes || [];
+                times.push(Date.now());
+                chrome.storage.local.set({ videoFinishTimes: times });
+                if (times.length >= 2 && request.videosLeft != null) {
+                    const intervals = [];
+                    for (let i = 1; i < times.length; i++) intervals.push(times[i] - times[i - 1]);
+                    const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+                    etaSeconds = Math.round(avgMs * request.videosLeft / 1000);
+                    chrome.storage.local.set({ lastEtaSeconds: etaSeconds });
+                }
+            } else if (r.videoFinishTimes && r.videoFinishTimes.length >= 2 && request.videosLeft != null) {
+                const times = r.videoFinishTimes;
+                const intervals = [];
+                for (let i = 1; i < times.length; i++) intervals.push(times[i] - times[i - 1]);
+                const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+                etaSeconds = Math.round(avgMs * request.videosLeft / 1000);
+            } else {
+                // Reuse last known ETA so popup doesn't revert to "working…"
+                etaSeconds = r.lastEtaSeconds ?? null;
+            }
+
+            const progressData = {
+                countText: request.countText,
+                phase: request.phase,
+                pct: request.pct,
+                etaSeconds
+            };
+            chrome.storage.local.set({ lastProgress: progressData });
+            chrome.runtime.sendMessage({ action: 'updateProgress', ...progressData }).catch(() => {});
+        });
+        return true;
     }
 
     else if (request.action === 'scrapingJobDone') {
@@ -146,12 +175,13 @@ function generateChannelInfoCSV(info) {
 }
 
 function generateVideoDataCSV(videoList, opts) {
-    const headers = ['Video Title', 'Description', 'Hashtags', 'Views', 'Upload Date', 'Likes', 'Comments', 'How This Was Made'];
+    const headers = ['Video Title', 'Description', 'Hashtags', 'Views', 'Upload Date', 'Likes', 'Comments', 'How This Was Made', 'Transcript'];
 
     const rows = videoList.map(v => {
         const cells = [
             escape(v.title), escape(v.description), escape(v.hashtags || ''),
-            escape(v.views), escape(v.date), escape(v.likes), escape(v.comments), escape(v.howThisWasMade)
+            escape(v.views), escape(v.date), escape(v.likes), escape(v.comments),
+            escape(v.howThisWasMade), escape(v.transcript || '')
         ];
         return cells.join(',');
     });
@@ -164,7 +194,7 @@ chrome.runtime.onInstalled.addListener(() => {
         isScraping: false,
         status: 'Ready',
         mode: 'research',
-        activeMode: 'research',
+        activeMode: 'deepdive',
         researchResult: null,
         deepdiveData: [],
         lastProgress: null,

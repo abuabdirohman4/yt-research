@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const filterFrom = document.getElementById('filterFrom');
     const filterTo = document.getElementById('filterTo');
 
-    let activeMode = 'research';
+    let activeMode = 'deepdive';
 
     const ICONS = {
         check: '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17Z" fill="currentColor"/>',
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         statusIconCircle.querySelector('svg').style.color = dotColor;
     }
 
-    function showProgressCard(countText, titleText, pct) {
+    function showProgressCard(countText, titleText, pct, etaSeconds) {
         statusCardWrap.style.display = 'none';
         progressCardWrap.style.display = '';
         settingsWrap.style.display = 'none';
@@ -153,8 +153,17 @@ document.addEventListener('DOMContentLoaded', () => {
         progressCount.textContent = countText || 'Working…';
         progressTitle.textContent = titleText || '';
         progressFill.style.width = `${pct || 0}%`;
-        etaPill.style.display = 'none';
-        etaEstimating.style.display = '';
+
+        if (etaSeconds != null) {
+            const min = Math.floor(etaSeconds / 60);
+            const sec = etaSeconds % 60;
+            etaPill.textContent = `~${min > 0 ? min + 'm ' : ''}${sec}s left`;
+            etaPill.style.display = '';
+            etaEstimating.style.display = 'none';
+        } else {
+            etaPill.style.display = 'none';
+            etaEstimating.style.display = '';
+        }
     }
 
     // ── UI state ──
@@ -320,14 +329,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const pct = request.pct || 0;
             progressFill.style.width = `${pct}%`;
 
-            etaPill.style.display = 'none';
-            etaEstimating.style.display = '';
+            if (request.etaSeconds != null) {
+                const min = Math.floor(request.etaSeconds / 60);
+                const sec = request.etaSeconds % 60;
+                etaPill.textContent = `~${min > 0 ? min + 'm ' : ''}${sec}s left`;
+                etaPill.style.display = '';
+                etaEstimating.style.display = 'none';
+            } else {
+                etaPill.style.display = 'none';
+                etaEstimating.style.display = '';
+            }
         }
     });
 
     // ── Initial load ──
     chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress'], (r) => {
-        activeMode = r.activeMode || 'research';
+        activeMode = r.activeMode || 'deepdive';
 
         applyTheme(r.theme || 'dark');
 
@@ -359,7 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
             startButton.disabled = true;
             stopButton.disabled = false;
             const p = r.lastProgress;
-            showProgressCard(p.countText, p.phase, p.pct);
+            showProgressCard(p.countText, p.phase, p.pct, p.etaSeconds);
         } else {
             updateUI(r.isScraping ?? false, r.status ?? 'Ready', r.researchResult);
         }
