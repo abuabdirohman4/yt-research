@@ -33,6 +33,52 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
+function resolveRelativeDate(dateStr) {
+    if (!dateStr) return dateStr;
+    const s = dateStr.trim().toLowerCase();
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+    let m;
+    if ((m = s.match(/^(\d+)\s*minute/))) {
+        return fmt(new Date(now - m[1] * 60000));
+    }
+    if ((m = s.match(/^(\d+)\s*hour/))) {
+        return fmt(new Date(now - m[1] * 3600000));
+    }
+    if ((m = s.match(/^(\d+)\s*day/))) {
+        return fmt(new Date(now - m[1] * 86400000));
+    }
+    if ((m = s.match(/^(\d+)\s*week/))) {
+        return fmt(new Date(now - m[1] * 7 * 86400000));
+    }
+    if ((m = s.match(/^(\d+)\s*month/))) {
+        const d = new Date(now);
+        d.setMonth(d.getMonth() - parseInt(m[1]));
+        return fmt(d);
+    }
+    if ((m = s.match(/^(\d+)\s*year/))) {
+        const d = new Date(now);
+        d.setFullYear(d.getFullYear() - parseInt(m[1]));
+        return fmt(d);
+    }
+    return dateStr; // already exact, return as-is
+}
+
+function parseNumber(val) {
+    if (val == null) return '';
+    const lower = String(val).trim().toLowerCase().replace(/,/g, '');
+    const m = lower.match(/^([\d.]+)\s*([kmb])?/);
+    if (!m) return val;
+    const num = parseFloat(m[1]);
+    if (isNaN(num)) return val;
+    if (m[2] === 'k') return Math.round(num * 1000);
+    if (m[2] === 'm') return Math.round(num * 1000000);
+    if (m[2] === 'b') return Math.round(num * 1000000000);
+    return Math.round(num);
+}
+
 function waitForElement(selector, timeout = 15000) {
     return new Promise((resolve, reject) => {
         const existing = document.querySelector(selector);
@@ -63,17 +109,35 @@ function parseVideoItems(limit) {
     for (const item of items) {
         if (limit && results.length >= limit) break;
 
-        const titleEl = item.querySelector('#video-title-link, #video-title, a#video-title, yt-formatted-string#video-title');
-        const title = titleEl ? titleEl.textContent.trim() : '';
+        // New YouTube UI: ytLockupMetadataViewModel structure
+        const newTitleEl = item.querySelector('h3.ytLockupMetadataViewModelHeadingReset');
+        const newLinkEl = item.querySelector('a.ytLockupMetadataViewModelTitle');
+        const newMetaSpans = item.querySelectorAll('span.ytContentMetadataViewModelMetadataText');
+
+        // Legacy YouTube UI: ytd-rich-item-renderer with #video-title
+        const legacyTitleLinkEl = item.querySelector('a#video-title-link');
+        const legacyTitleEl = item.querySelector('yt-formatted-string#video-title, #video-title');
+        const legacyMetaSpans = item.querySelectorAll('#metadata-line span.inline-metadata-item');
+
+        let title = '';
+        let views = '';
+        let date = '';
+        let videoUrl = '';
+
+        if (newTitleEl) {
+            title = (newTitleEl.getAttribute('title') || newLinkEl?.textContent || '').trim();
+            views = newMetaSpans[0] ? newMetaSpans[0].textContent.trim() : '';
+            date = newMetaSpans[1] ? newMetaSpans[1].textContent.trim() : '';
+            videoUrl = newLinkEl ? new URL(newLinkEl.getAttribute('href'), 'https://www.youtube.com').href : '';
+        } else {
+            title = (legacyTitleLinkEl?.title || legacyTitleEl?.textContent || '').trim();
+            views = legacyMetaSpans[0] ? legacyMetaSpans[0].textContent.trim() : '';
+            date = legacyMetaSpans[1] ? legacyMetaSpans[1].textContent.trim() : '';
+            const linkEl = legacyTitleLinkEl || item.querySelector('a#thumbnail') || item.querySelector('a[href*="/watch?v="]');
+            videoUrl = linkEl ? linkEl.href : '';
+        }
+
         if (!title) continue;
-
-        const metaSpans = item.querySelectorAll('#metadata-line span.inline-metadata-item');
-        const views = metaSpans[0] ? metaSpans[0].textContent.trim() : '';
-        const date = metaSpans[1] ? metaSpans[1].textContent.trim() : '';
-
-        const linkEl = item.querySelector('a#video-title-link') || item.querySelector('a#thumbnail') || item.querySelector('a[href*="/watch?v="]');
-        const videoUrl = linkEl ? linkEl.href : '';
-
         results.push({ title, views, date, videoUrl });
     }
     console.log(`[YTResearch] parseVideoItems: ${items.length} items found, ${results.length} with titles`);
@@ -317,9 +381,27 @@ async function runChannelResearch() {
 
 // ===================== COMPETITOR DEEP DIVE SCRAPER =====================
 
+function applyVideoFilter(videoList, filter) {
+    if (!filter || filter.mode === 'all') return videoList;
+    if (filter.mode === 'count') {
+        const n = parseInt(filter.count, 10);
+        if (!n || n <= 0) return videoList;
+        // YouTube /videos sorts newest first by default
+        return filter.direction === 'oldest' ? videoList.slice(-n) : videoList.slice(0, n);
+    }
+    // date filter: relative dates ("2 days ago") not parseable — return all
+    return videoList;
+}
+
 async function runDeepDive(deepdiveOptions) {
+    if (window.ytResearchDeepDiveRunning) {
+        console.warn('[YTResearch] runDeepDive already running, ignoring');
+        return;
+    }
+    window.ytResearchDeepDiveRunning = true;
+    try {
     const pageType = getPageType();
-    const state = await chrome.storage.local.get(['scrapePhase', 'channelBase', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex']);
+    const state = await chrome.storage.local.get(['scrapePhase', 'channelBase', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'videoFilter']);
     const phase = state.scrapePhase;
 
     console.log(`[YTResearch] runDeepDive page=${pageType} phase=${phase}`);
@@ -342,14 +424,15 @@ async function runDeepDive(deepdiveOptions) {
         sendProgress('Step 1', 'Scraping channel info…', 10);
         const channelInfo = await scrapeChannelInfo();
         console.log('[YTResearch] Channel info scraped:', JSON.stringify(channelInfo));
-        await chrome.storage.local.set({ deepdiveChannelInfo: channelInfo, scrapePhase: 'done' });
-        // TEMP: finish here to verify channel info before proceeding to video scraping
-        await finishDeepDive(deepdiveOptions, { ...state, deepdiveChannelInfo: channelInfo, deepdiveVideoList: [] });
+        await chrome.storage.local.set({ deepdiveChannelInfo: channelInfo, scrapePhase: 'videos' });
+        const channelBase = state.channelBase || getChannelBaseUrl();
+        sendProgress('Step 2', 'Loading videos page…', 15);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: channelBase + '/videos' });
         return;
     }
 
     // Phase: scroll and collect all videos
-    if (!phase || phase === 'videos' || (pageType === 'channel-videos-latest' && !phase)) {
+    if ((!phase && pageType !== 'channel-home') || phase === 'videos') {
         if (!deepdiveOptions.channelInfo) {
             const channelBase = getChannelBaseUrl();
             await chrome.storage.local.set({ channelBase });
@@ -380,51 +463,107 @@ async function runDeepDive(deepdiveOptions) {
             scrollAttempts++;
         }
 
-        const videoList = parseVideoItems(0); // all items
-        console.log(`[YTResearch] Deep dive collected ${videoList.length} videos`);
+        const rawVideoList = parseVideoItems(0);
+        const videoList = applyVideoFilter(rawVideoList, state.videoFilter);
+        console.log(`[YTResearch] Deep dive collected ${rawVideoList.length} videos, ${videoList.length} after filter`);
 
-        if (!deepdiveOptions.videoDescriptions) {
-            // No per-video pages needed — finish directly
-            await chrome.storage.local.set({ deepdiveVideoList: videoList, scrapePhase: 'done' });
-            await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: videoList });
+        if (!deepdiveOptions.videoData) {
+            // No per-video scraping needed — finish with channel info only
+            await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: [] });
             return;
         }
 
-        // Need per-video descriptions
+        if (videoList.length === 0) {
+            await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: [] });
+            return;
+        }
+
         await chrome.storage.local.set({
             deepdiveVideoList: videoList,
             deepdiveVideoIndex: 0,
-            scrapePhase: 'video-description'
+            scrapePhase: 'video-detail'
         });
-        if (videoList.length > 0 && videoList[0].videoUrl) {
-            sendProgress('Step 3', `Video 1/${videoList.length}: loading…`, 62);
-            chrome.runtime.sendMessage({ action: 'navigateTo', url: videoList[0].videoUrl });
-        } else {
-            await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: videoList });
-        }
+        sendProgress('Step 3', `Video 1/${videoList.length}: loading…`, 62);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: videoList[0].videoUrl });
         return;
     }
 
-    // Phase: scrape per-video descriptions
-    if (phase === 'video-description' && pageType === 'watch') {
+    // Phase: scrape per-video data
+    if (phase === 'video-detail' && pageType === 'watch') {
         const videoList = state.deepdiveVideoList || [];
         const idx = state.deepdiveVideoIndex || 0;
         const total = videoList.length;
 
-        sendProgress(`Video ${idx + 1}/${total}`, 'Scraping description…', 62 + Math.round((idx / total) * 35));
-        await sleep(2000);
+        sendProgress(`Video ${idx + 1}/${total}`, 'Scraping video data…', 62 + Math.round((idx / total) * 35));
+        await sleep(3000);
 
-        // Expand description if collapsed
-        const expandBtn = document.querySelector('#expand, tp-yt-paper-button#expand, #description-inline-expander #expand');
-        if (expandBtn) expandBtn.click();
+        // Scroll to top to ensure #info and title are visible/rendered
+        window.scrollTo(0, 0);
         await sleep(500);
 
-        const descEl = document.querySelector('#description #content yt-formatted-string')
-            || document.querySelector('#description yt-formatted-string')
-            || document.querySelector('[slot="content"] yt-formatted-string');
-        const description = descEl ? descEl.innerText.trim() : '';
+        // Exact title
+        const titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')
+            || document.querySelector('ytd-watch-metadata h1 yt-formatted-string');
+        const exactTitle = titleEl ? titleEl.textContent.trim() : videoList[idx].title;
 
-        videoList[idx] = { ...videoList[idx], description };
+        // Description — click expand first (may trigger exact views/date render too)
+        let description = '';
+        try {
+            await waitForElement('#description-inline-expander', 5000);
+            const expandBtn = document.querySelector('tp-yt-paper-button#expand');
+            if (expandBtn) { expandBtn.click(); await sleep(1500); }
+            const expandedEl = document.querySelector('#description-inline-expander #expanded span.ytAttributedStringHost');
+            const fallbackEl = document.querySelector('#description-inline-expander');
+            const rawDesc = (expandedEl?.innerText || fallbackEl?.innerText || '').trim();
+            description = rawDesc.replace(/\n\n+/g, ' | ').replace(/\n/g, ' ');
+        } catch (e) { /* description not available */ }
+
+        // Exact views + date — read AFTER expand (expand may trigger exact render)
+        let exactViews = videoList[idx].views;
+        let exactDate = videoList[idx].date;
+        let exactHashtags = '';
+        {
+            const infoEl = document.querySelector('yt-formatted-string#info');
+            const infoText = infoEl ? infoEl.innerText.trim() : '';
+            const viewsMatch = infoText.match(/^([\d,]+)\s*views/i);
+            const dateMatch = infoText.match(/views\s+(.+)$/i);
+            if (viewsMatch) exactViews = parseNumber(viewsMatch[1]);
+            if (dateMatch) {
+                // Split date from hashtags: "1 Jun 2026  #tag1 #tag2"
+                const rawDate = dateMatch[1].trim();
+                const hashIdx = rawDate.indexOf('#');
+                exactDate = resolveRelativeDate(hashIdx >= 0 ? rawDate.slice(0, hashIdx).trim() : rawDate);
+                exactHashtags = hashIdx >= 0 ? rawDate.slice(hashIdx).trim() : '';
+            }
+            console.log('[YTResearch] views:', exactViews, 'date:', exactDate, 'hashtags:', exactHashtags);
+        }
+
+        // Likes — wait for like-button-view-model to render
+        let likes = '';
+        try {
+            await waitForElement('like-button-view-model button .ytSpecButtonShapeNextButtonTextContent', 5000);
+            const likesEl = document.querySelector('like-button-view-model button .ytSpecButtonShapeNextButtonTextContent');
+            likes = likesEl ? parseNumber(likesEl.textContent.trim()) : '';
+        } catch (e) { /* likes not available */ }
+
+        // Comments — wait for #comments to exist, scroll into view, then wait for count
+        let comments = '0';
+        try {
+            await waitForElement('#comments', 8000);
+            const commentsSection = document.querySelector('#comments');
+            commentsSection.scrollIntoView({ behavior: 'instant' });
+            await sleep(2500);
+            const commentsEl = document.querySelector('yt-formatted-string.count-text span:first-child');
+            comments = commentsEl ? commentsEl.textContent.trim() : '0';
+        } catch (e) { /* comments not available */ }
+
+        // How this was made
+        const howEl = document.querySelector('how-this-was-made-section-view-model');
+        const howThisWasMade = howEl
+            ? (howEl.querySelector('.ytwHowThisWasMadeSectionViewModelBodyHeader')?.textContent?.trim() || 'Yes')
+            : '';
+
+        videoList[idx] = { ...videoList[idx], title: exactTitle, views: exactViews, date: exactDate, hashtags: exactHashtags, description, likes, comments, howThisWasMade };
 
         const nextIdx = idx + 1;
         if (nextIdx >= total || window.ytResearchStopRequested) {
@@ -433,7 +572,7 @@ async function runDeepDive(deepdiveOptions) {
         } else {
             await chrome.storage.local.set({ deepdiveVideoList: videoList, deepdiveVideoIndex: nextIdx });
             sendProgress(`Video ${nextIdx + 1}/${total}`, 'Loading next video…', 62 + Math.round((nextIdx / total) * 35));
-            await sleep(1000);
+            await sleep(800);
             chrome.runtime.sendMessage({ action: 'navigateTo', url: videoList[nextIdx].videoUrl });
         }
         return;
@@ -441,55 +580,36 @@ async function runDeepDive(deepdiveOptions) {
 
     console.warn('[YTResearch] Unhandled deepdive state', { phase, pageType });
     chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+    } finally {
+        window.ytResearchDeepDiveRunning = false;
+    }
 }
 
 async function finishDeepDive(deepdiveOptions, state) {
     const videoList = state.deepdiveVideoList || [];
     const channelInfo = state.deepdiveChannelInfo || {};
 
-    let data = videoList.map(v => ({
-        channelName: channelInfo.channelName || '',
-        subscribers: channelInfo.subscribers || '',
-        totalVideos: channelInfo.totalVideos || '',
-        channelUrl: channelInfo.channelUrl || '',
-        country: channelInfo.country || '',
-        joinedDate: channelInfo.joinedDate || '',
-        totalViews: channelInfo.totalViews || '',
-        channelDescription: channelInfo.channelDescription || '',
-        title: v.title || '',
-        views: v.views || '',
-        date: v.date || '',
-        description: v.description || ''
-    }));
+    await chrome.storage.local.set({
+        deepdiveChannelData: deepdiveOptions.channelInfo ? channelInfo : null,
+        deepdiveVideoData: deepdiveOptions.videoData ? videoList : null,
+        deepdiveOptions,
+        scrapePhase: null
+    });
 
-    // If no videos but have channel info, still export a row with channel data only
-    if (data.length === 0 && channelInfo.channelName) {
-        data = [{
-            channelName: channelInfo.channelName || '',
-            subscribers: channelInfo.subscribers || '',
-            totalVideos: channelInfo.totalVideos || '',
-            totalViews: channelInfo.totalViews || '',
-            channelUrl: channelInfo.channelUrl || '',
-            country: channelInfo.country || '',
-            joinedDate: channelInfo.joinedDate || '',
-            channelDescription: channelInfo.channelDescription || '',
-            title: '', views: '', date: '', description: ''
-        }];
-    }
-
-    await chrome.storage.local.set({ deepdiveData: data, scrapePhase: null });
-    sendProgress('Done', `Collected ${data.length} videos`, 100);
+    sendProgress('Done', 'Complete', 100);
     chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+
+    // Navigate back to /videos after done
+    const channelBase = state.channelBase || (channelInfo.channelUrl ? channelInfo.channelUrl.replace(/\/$/, '') : null);
+    if (channelBase) {
+        await sleep(1000);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: channelBase + '/videos' });
+    }
 }
 
 // ===================== MAIN ENTRY =====================
 
 async function runScraping(mode, deepdiveOptions) {
-    if (window.ytResearchScraping) {
-        console.warn('[YTResearch] runScraping called while already running, ignoring');
-        return;
-    }
-    window.ytResearchScraping = true;
     const pageType = getPageType();
     console.log(`[YTResearch] runScraping mode=${mode} page=${pageType}`);
 
@@ -513,7 +633,6 @@ async function runScraping(mode, deepdiveOptions) {
 if (!window.ytResearchLoaded) {
     window.ytResearchLoaded = true;
     window.ytResearchStopRequested = false;
-    window.ytResearchScraping = false;
     let isMessageDriven = false;
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -557,8 +676,8 @@ if (!window.ytResearchLoaded) {
             const deepdiveOptions = state.deepdiveOptions || {};
             const shouldContinue =
                 (pageType === 'channel-home' && phase === 'channel-home') ||
-                (pageType === 'channel-videos-latest' && (phase === 'videos' || !phase)) ||
-                (pageType === 'watch' && phase === 'video-description');
+                (pageType === 'channel-videos-latest' && phase === 'videos') ||
+                (pageType === 'watch' && phase === 'video-detail');
 
             if (shouldContinue) {
                 runDeepDive(deepdiveOptions);

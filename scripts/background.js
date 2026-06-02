@@ -42,6 +42,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 scrapingTabId: tabId,
                 mode: request.mode,
                 deepdiveOptions: request.deepdiveOptions || {},
+                videoFilter: request.videoFilter || { mode: 'all' },
                 researchResult: null,
                 deepdiveData: [],
                 lastProgress: null,
@@ -75,31 +76,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     else if (request.action === 'scrapingJobDone') {
-        chrome.storage.local.get(['mode', 'researchResult', 'deepdiveData', 'deepdiveOptions'], (r) => {
+        chrome.storage.local.get(['mode', 'researchResult', 'deepdiveChannelData', 'deepdiveVideoData', 'deepdiveOptions'], (r) => {
             chrome.storage.local.set({ lastProgress: null });
 
             if (r.mode === 'research') {
                 const result = r.researchResult || request.result;
                 chrome.storage.local.set({ researchResult: result });
                 setScrapingState(false, 'Done!', { result });
-            } else {
-                // deepdive — export CSV
-                const data = r.deepdiveData || [];
-                if (data.length === 0) {
-                    setScrapingState(false, 'Done! (no data)');
-                    return;
-                }
-                const opts = r.deepdiveOptions || {};
-                const csv = generateDeepDiveCSV(data, opts);
-                const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-                const filename = `yt-research-deepdive_${Date.now()}.csv`;
-                chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, () => {
-                    if (chrome.runtime.lastError) {
-                        console.error('[Background] Download failed:', chrome.runtime.lastError.message);
-                    }
-                });
-                setScrapingState(false, 'Done! CSV downloaded.');
+                return;
             }
+
+            // deepdive — export 1 or 2 CSVs
+            const opts = r.deepdiveOptions || {};
+            const ts = Date.now();
+            let downloadCount = 0;
+
+            if (opts.channelInfo && r.deepdiveChannelData && r.deepdiveChannelData.channelName) {
+                const csv = generateChannelInfoCSV(r.deepdiveChannelData);
+                const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+                chrome.downloads.download({ url: dataUrl, filename: `yt-channel-info_${ts}.csv`, saveAs: false });
+                downloadCount++;
+            }
+
+            if (opts.videoData && r.deepdiveVideoData && r.deepdiveVideoData.length > 0) {
+                const csv = generateVideoDataCSV(r.deepdiveVideoData, opts);
+                const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+                chrome.downloads.download({ url: dataUrl, filename: `yt-video-data_${ts}.csv`, saveAs: false });
+                downloadCount++;
+            }
+
+            setScrapingState(false, downloadCount > 0 ? `Done! ${downloadCount} CSV downloaded.` : 'Done! (no data)');
         });
         sendResponse({ success: true });
         return true;
@@ -117,36 +123,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
 });
 
-function generateDeepDiveCSV(data, opts) {
-    const headers = [];
-    if (opts.channelInfo) headers.push(
-        'Channel Name', 'Subscribers', 'Total Videos', 'Total Views',
-        'Channel URL', 'Country', 'Joined Date', 'Channel Description'
-    );
-    headers.push('Video Title');
-    if (opts.videoMeta) headers.push('Views', 'Upload Date');
-    if (opts.videoDescriptions) headers.push('Description');
+function escape(val) {
+    if (val == null) return '';
+    const s = String(val);
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
 
-    const escape = (val) => {
-        if (val == null) return '';
-        const s = String(val);
-        if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-            return '"' + s.replace(/"/g, '""') + '"';
-        }
-        return s;
-    };
+function generateChannelInfoCSV(info) {
+    const headers = ['Channel Name', 'Subscribers', 'Total Videos', 'Total Views', 'Channel URL', 'Country', 'Joined Date', 'Channel Description'];
+    const row = [
+        escape(info.channelName), escape(info.subscribers), escape(info.totalVideos), escape(info.totalViews),
+        escape(info.channelUrl), escape(info.country), escape(info.joinedDate), escape(info.channelDescription)
+    ].join(',');
+    return [headers.join(','), row].join('\n');
+}
 
-    const rows = data.map(row => {
-        const cells = [];
-        if (opts.channelInfo) {
-            cells.push(
-                escape(row.channelName), escape(row.subscribers), escape(row.totalVideos), escape(row.totalViews),
-                escape(row.channelUrl), escape(row.country), escape(row.joinedDate), escape(row.channelDescription)
-            );
-        }
-        cells.push(escape(row.title));
-        if (opts.videoMeta) cells.push(escape(row.views), escape(row.date));
-        if (opts.videoDescriptions) cells.push(escape(row.description));
+function generateVideoDataCSV(videoList, opts) {
+    const headers = ['Video Title', 'Description', 'Hashtags', 'Views', 'Upload Date', 'Likes', 'Comments', 'How This Was Made'];
+
+    const rows = videoList.map(v => {
+        const cells = [
+            escape(v.title), escape(v.description), escape(v.hashtags || ''),
+            escape(v.views), escape(v.date), escape(v.likes), escape(v.comments), escape(v.howThisWasMade)
+        ];
         return cells.join(',');
     });
 
@@ -164,9 +166,8 @@ chrome.runtime.onInstalled.addListener(() => {
         lastProgress: null,
         deepdiveOptions: {
             channelInfo: true,
-            videoTitles: true,
-            videoMeta: true,
-            videoDescriptions: false
+            videoData: true,
+            videoDescriptions: true
         }
     });
 });

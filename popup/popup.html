@@ -76,9 +76,38 @@
 
     <!-- Settings (Deep Dive only) -->
     <div class="settings-wrap" id="settingsWrap" style="display:none">
+        <div class="settings-row" id="videoFilterRow">
+            <span class="settings-label">Videos</span>
+            <div class="radio-group">
+                <label class="radio-label"><input type="radio" name="videoFilter" value="all" checked> All</label>
+                <label class="radio-label"><input type="radio" name="videoFilter" value="count"> Count</label>
+                <label class="radio-label"><input type="radio" name="videoFilter" value="date"> Date</label>
+            </div>
+        </div>
+        <div class="filter-sub" id="filterCountWrap" style="display:none">
+            <div class="filter-date-row">
+                <input type="number" id="filterCount" min="1" max="9999" placeholder="e.g. 10" class="filter-input">
+                <select id="filterDirection" class="filter-input" style="width:auto">
+                    <option value="latest">Latest</option>
+                    <option value="oldest">Oldest</option>
+                </select>
+                <span class="filter-hint">videos</span>
+            </div>
+        </div>
+        <div class="filter-sub" id="filterDateWrap" style="display:none">
+            <div class="filter-date-row">
+                <span class="filter-hint">From</span>
+                <input type="date" id="filterFrom" class="filter-input">
+            </div>
+            <div class="filter-date-row">
+                <span class="filter-hint">To</span>
+                <input type="date" id="filterTo" class="filter-input">
+            </div>
+        </div>
+        <div class="settings-divider"></div>
         <div class="settings-row settings-accordion-header" id="deepdiveAccordionHeader">
             <span class="settings-label">Scrape</span>
-            <span class="accordion-summary" id="deepdiveSummary">4 selected</span>
+            <span class="accordion-summary" id="deepdiveSummary">2 selected</span>
             <span class="accordion-arrow" id="deepdiveArrow">&#9660;</span>
         </div>
         <div class="columns-list" id="deepdiveOptionsList">
@@ -86,17 +115,8 @@
                 <input type="checkbox" value="channelInfo" id="optChannelInfo" checked> Channel info
             </label>
             <label class="column-toggle-label">
-                <input type="checkbox" value="videoTitles" id="optVideoTitles" checked> All video titles
+                <input type="checkbox" value="videoData" id="optVideoData" checked> Video data
             </label>
-            <label class="column-toggle-label">
-                <input type="checkbox" value="videoMeta" id="optVideoMeta" checked> Views &amp; dates
-            </label>
-            <label class="column-toggle-label">
-                <input type="checkbox" value="videoDescriptions" id="optVideoDescriptions"> Video descriptions
-            </label>
-        </div>
-        <div class="description-warning" id="descriptionWarning" style="display:none">
-            ⚠ Scraping descriptions visits each video page — may take several minutes.
         </div>
     </div>
 

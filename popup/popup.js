@@ -23,7 +23,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const deepdiveOptionsList = document.getElementById('deepdiveOptionsList');
     const deepdiveSummary = document.getElementById('deepdiveSummary');
     const deepdiveArrow = document.getElementById('deepdiveArrow');
-    const descriptionWarning = document.getElementById('descriptionWarning');
+    const descriptionWarning = null; // removed
+    const filterCountWrap = document.getElementById('filterCountWrap');
+    const filterDateWrap = document.getElementById('filterDateWrap');
+    const filterCount = document.getElementById('filterCount');
+    const filterDirection = document.getElementById('filterDirection');
+    const filterFrom = document.getElementById('filterFrom');
+    const filterTo = document.getElementById('filterTo');
 
     let activeMode = 'research';
 
@@ -34,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const FOOTER_TEXT = {
         research: 'Open a YouTube channel\'s Videos tab, then click Start.',
-        deepdive: 'Open a YouTube channel page (@handle or /videos), then click Start.',
+        deepdive: 'Open a YouTube channel page (/videos), then click Start. <br> Keep the tab active while scraping to get comment counts.',
     };
 
     // ── Mode tabs ──
@@ -50,7 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.mode-tab').forEach(t => {
             t.classList.toggle('active', t.dataset.mode === activeMode);
         });
-        footerText.textContent = FOOTER_TEXT[activeMode] || FOOTER_TEXT.research;
+        footerText.innerHTML = FOOTER_TEXT[activeMode] || FOOTER_TEXT.research;
 
         // Settings only visible in deepdive and when not scraping
         const scraping = startButton.disabled;
@@ -85,24 +91,44 @@ document.addEventListener('DOMContentLoaded', () => {
         deepdiveArrow.textContent = open ? '▼' : '▲';
     });
 
-    function updateDeepiveSummary() {
-        const checked = deepdiveOptionsList.querySelectorAll('input:checked').length;
-        deepdiveSummary.textContent = `${checked} selected`;
+    function readVideoFilter() {
+        const mode = document.querySelector('input[name="videoFilter"]:checked')?.value || 'all';
+        if (mode === 'count') return { mode, count: parseInt(filterCount.value, 10) || 10, direction: filterDirection.value || 'latest' };
+        if (mode === 'date') return { mode, from: filterFrom.value, to: filterTo.value };
+        return { mode: 'all' };
+    }
+
+    function updateFilterUI(mode) {
+        filterCountWrap.style.display = mode === 'count' ? '' : 'none';
+        filterDateWrap.style.display = mode === 'date' ? '' : 'none';
     }
 
     function saveDeepidiveOptions() {
-        const opts = {};
-        deepdiveOptionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-            opts[cb.value] = cb.checked;
-        });
-        chrome.storage.local.set({ deepdiveOptions: opts });
+        const opts = {
+            channelInfo: document.getElementById('optChannelInfo').checked,
+            videoData: document.getElementById('optVideoData').checked,
+            videoDescriptions: true, // always scrape descriptions
+        };
+        chrome.storage.local.set({ deepdiveOptions: opts, videoFilter: readVideoFilter() });
         updateDeepiveSummary();
-        descriptionWarning.style.display = document.getElementById('optVideoDescriptions').checked ? '' : 'none';
+    }
+
+    function updateDeepiveSummary() {
+        const checked = ['optChannelInfo', 'optVideoData'].filter(id => document.getElementById(id)?.checked).length;
+        deepdiveSummary.textContent = `${checked} selected`;
     }
 
     deepdiveOptionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', saveDeepidiveOptions);
     });
+
+    document.querySelectorAll('input[name="videoFilter"]').forEach(radio => {
+        radio.addEventListener('change', () => { updateFilterUI(radio.value); saveDeepidiveOptions(); });
+    });
+    filterCount.addEventListener('input', saveDeepidiveOptions);
+    filterDirection.addEventListener('change', saveDeepidiveOptions);
+    filterFrom.addEventListener('change', saveDeepidiveOptions);
+    filterTo.addEventListener('change', saveDeepidiveOptions);
 
     // ── Status card helpers ──
     function showStatusCard(label, sub, iconName, dotColor) {
@@ -262,7 +288,8 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({
             action: 'startScraping',
             mode: activeMode,
-            deepdiveOptions
+            deepdiveOptions,
+            videoFilter: readVideoFilter()
         }, (response) => {
             if (chrome.runtime.lastError) {
                 updateUI(false, 'Error: Failed to start');
@@ -297,20 +324,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Initial load ──
-    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'isScraping', 'status', 'researchResult', 'lastProgress'], (r) => {
+    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress'], (r) => {
         activeMode = r.activeMode || 'research';
 
         applyTheme(r.theme || 'dark');
 
         // Restore deepdive options
         if (r.deepdiveOptions) {
-            deepdiveOptionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                if (r.deepdiveOptions[cb.value] !== undefined) {
-                    cb.checked = r.deepdiveOptions[cb.value];
-                }
+            ['channelInfo', 'videoData'].forEach(key => {
+                const el = document.getElementById('opt' + key.charAt(0).toUpperCase() + key.slice(1));
+                if (el && r.deepdiveOptions[key] !== undefined) el.checked = r.deepdiveOptions[key];
             });
-            updateDeepiveSummary();
-            descriptionWarning.style.display = r.deepdiveOptions.videoDescriptions ? '' : 'none';
+            saveDeepidiveOptions();
+        }
+
+        if (r.videoFilter) {
+            const m = r.videoFilter.mode || 'all';
+            const radio = document.querySelector(`input[name="videoFilter"][value="${m}"]`);
+            if (radio) radio.checked = true;
+            if (m === 'count' && r.videoFilter.count) filterCount.value = r.videoFilter.count;
+            if (m === 'count' && r.videoFilter.direction) filterDirection.value = r.videoFilter.direction;
+            if (m === 'date') {
+                if (r.videoFilter.from) filterFrom.value = r.videoFilter.from;
+                if (r.videoFilter.to) filterTo.value = r.videoFilter.to;
+            }
+            updateFilterUI(m);
         }
 
         renderMode();
