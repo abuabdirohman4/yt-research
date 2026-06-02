@@ -111,6 +111,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    else if (request.action === 'downloadThumbnail') {
+        chrome.downloads.download({ url: request.url, filename: request.filename, saveAs: false });
+    }
+
     else if (request.action === 'navigateTo') {
         chrome.storage.local.get(['scrapingTabId'], (r) => {
             if (r.scrapingTabId) {
@@ -166,7 +170,9 @@ chrome.runtime.onInstalled.addListener(() => {
         lastProgress: null,
         deepdiveOptions: {
             channelInfo: true,
+            channelImages: true,
             videoData: true,
+            thumbnails: true,
             videoDescriptions: true
         }
     });

@@ -138,7 +138,9 @@ function parseVideoItems(limit) {
         }
 
         if (!title) continue;
-        results.push({ title, views, date, videoUrl });
+        const videoId = videoUrl ? new URL(videoUrl).searchParams.get('v') : '';
+        const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
+        results.push({ title, views, date, videoUrl, thumbnailUrl });
     }
     console.log(`[YTResearch] parseVideoItems: ${items.length} items found, ${results.length} with titles`);
     return results;
@@ -154,6 +156,14 @@ async function scrapeChannelInfo() {
         console.warn('[YTResearch] Channel name not found');
     }
     await sleep(1000);
+
+    // Avatar
+    const avatarImg = document.querySelector('img.ytSpecAvatarShapeImage');
+    const avatarUrl = avatarImg ? avatarImg.src : '';
+
+    // Banner (optional — not all channels have it)
+    const bannerImg = document.querySelector('yt-image-banner-view-model img');
+    const bannerUrl = bannerImg ? bannerImg.src : '';
 
     // Channel name from header or page title
     const nameEl = document.querySelector('yt-formatted-string#text.ytd-channel-name')
@@ -254,7 +264,9 @@ async function scrapeChannelInfo() {
         channelUrl,
         country,
         joinedDate,
-        channelDescription
+        channelDescription,
+        avatarUrl,
+        bannerUrl
     };
 }
 
@@ -283,7 +295,9 @@ async function scrapeChannelInfoFallback(channelName, subscribers) {
         channelUrl: window.location.href,
         country: '',
         joinedDate: '',
-        channelDescription
+        channelDescription,
+        avatarUrl: '',
+        bannerUrl: ''
     };
 }
 
@@ -411,8 +425,9 @@ async function runDeepDive(deepdiveOptions) {
         return;
     }
 
-    // Phase: collect channel info from home page
-    if (deepdiveOptions.channelInfo && !phase && pageType !== 'channel-home') {
+    // Phase: collect channel info / channel images from home page
+    const needsChannelHome = deepdiveOptions.channelInfo || deepdiveOptions.channelImages;
+    if (needsChannelHome && !phase && pageType !== 'channel-home') {
         const channelBase = getChannelBaseUrl();
         await chrome.storage.local.set({ channelBase, scrapePhase: 'channel-home' });
         sendProgress('Step 1', 'Loading channel home…', 5);
@@ -420,11 +435,28 @@ async function runDeepDive(deepdiveOptions) {
         return;
     }
 
-    if (phase === 'channel-home' || (deepdiveOptions.channelInfo && pageType === 'channel-home' && !phase)) {
+    if (phase === 'channel-home' || (needsChannelHome && pageType === 'channel-home' && !phase)) {
         sendProgress('Step 1', 'Scraping channel info…', 10);
         const channelInfo = await scrapeChannelInfo();
         console.log('[YTResearch] Channel info scraped:', JSON.stringify(channelInfo));
         await chrome.storage.local.set({ deepdiveChannelInfo: channelInfo, scrapePhase: 'videos' });
+
+        if (deepdiveOptions.channelImages && channelInfo) {
+            const safeName = (channelInfo.channelName || 'channel')
+                .replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_');
+            if (channelInfo.avatarUrl) {
+                chrome.runtime.sendMessage({ action: 'downloadThumbnail', url: channelInfo.avatarUrl, filename: `channel-images/${safeName}_avatar.jpg` });
+            }
+            if (channelInfo.bannerUrl) {
+                chrome.runtime.sendMessage({ action: 'downloadThumbnail', url: channelInfo.bannerUrl, filename: `channel-images/${safeName}_banner.jpg` });
+            }
+        }
+
+        if (!deepdiveOptions.videoData && !deepdiveOptions.thumbnails) {
+            await finishDeepDive(deepdiveOptions, { ...state, deepdiveVideoList: [] });
+            return;
+        }
+
         const channelBase = state.channelBase || getChannelBaseUrl();
         sendProgress('Step 2', 'Loading videos page…', 15);
         chrome.runtime.sendMessage({ action: 'navigateTo', url: channelBase + '/videos' });
@@ -466,6 +498,19 @@ async function runDeepDive(deepdiveOptions) {
         const rawVideoList = parseVideoItems(0);
         const videoList = applyVideoFilter(rawVideoList, state.videoFilter);
         console.log(`[YTResearch] Deep dive collected ${rawVideoList.length} videos, ${videoList.length} after filter`);
+
+        if (deepdiveOptions.thumbnails && videoList.length > 0) {
+            const total = videoList.length;
+            const channelName = (state.deepdiveChannelInfo?.channelName || 'channel')
+                .replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_');
+            videoList.forEach((v, i) => {
+                if (!v.thumbnailUrl) return;
+                const num = String(total - i).padStart(3, '0');
+                chrome.runtime.sendMessage({ action: 'downloadThumbnail', url: v.thumbnailUrl, filename: `thumbnails/${channelName}_${num}.jpg` });
+            });
+            sendProgress('Thumbnails', `Downloading ${total} thumbnails…`, 65);
+            await sleep(1000);
+        }
 
         if (!deepdiveOptions.videoData) {
             // No per-video scraping needed — finish with channel info only

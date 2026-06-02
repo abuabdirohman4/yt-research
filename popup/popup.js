@@ -106,7 +106,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveDeepidiveOptions() {
         const opts = {
             channelInfo: document.getElementById('optChannelInfo').checked,
+            channelImages: document.getElementById('optChannelImages').checked,
             videoData: document.getElementById('optVideoData').checked,
+            thumbnails: document.getElementById('optThumbnails').checked,
             videoDescriptions: true, // always scrape descriptions
         };
         chrome.storage.local.set({ deepdiveOptions: opts, videoFilter: readVideoFilter() });
@@ -114,7 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateDeepiveSummary() {
-        const checked = ['optChannelInfo', 'optVideoData'].filter(id => document.getElementById(id)?.checked).length;
+        const checked = ['optChannelInfo', 'optChannelImages', 'optVideoData', 'optThumbnails'].filter(id => document.getElementById(id)?.checked).length;
         deepdiveSummary.textContent = `${checked} selected`;
     }
 
@@ -331,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Restore deepdive options
         if (r.deepdiveOptions) {
-            ['channelInfo', 'videoData'].forEach(key => {
+            ['channelInfo', 'channelImages', 'videoData', 'thumbnails'].forEach(key => {
                 const el = document.getElementById('opt' + key.charAt(0).toUpperCase() + key.slice(1));
                 if (el && r.deepdiveOptions[key] !== undefined) el.checked = r.deepdiveOptions[key];
             });
