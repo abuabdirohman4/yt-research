@@ -31,6 +31,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const filterFrom = document.getElementById('filterFrom');
     const filterTo = document.getElementById('filterTo');
 
+    // Research Niche elements
+    const nicheWrap = document.getElementById('nicheWrap');
+    const nicheChannelsPerNiche = document.getElementById('nicheChannelsPerNiche');
+    const nicheSuffix = document.getElementById('nicheSuffix');
+    const nicheDateFilter = document.getElementById('nicheDateFilter');
+    const nicheAccordionHeader = document.getElementById('nicheAccordionHeader');
+    const nichePanel = document.getElementById('nichePanel');
+    const nicheArrow = document.getElementById('nicheArrow');
+    const nicheSummary = document.getElementById('nicheSummary');
+    const nicheList = document.getElementById('nicheList');
+    const nicheAddInput = document.getElementById('nicheAddInput');
+    const nicheAddBtn = document.getElementById('nicheAddBtn');
+    const nicheSelectAll = document.getElementById('nicheSelectAll');
+    const nicheSelectNone = document.getElementById('nicheSelectNone');
+
+    const NICHE_PRESETS = [
+        'EDM', 'Reggaeton English', 'Reggaeton Latino', 'HipHop', 'Bachata', 'Jazz', 'Rock', 'Country',
+        'Pop Ballad', 'Cubano Jazz', 'Deep House', 'Bollywood Pop Romance', 'Mediterranean Music',
+        'Italiano Vintage', 'Amapiano', 'Afro House', 'Afro Soul', 'Afrobeat Tribal', 'Flamenco Rumba',
+        'Flamenco Oud Andalusia', 'Cumbia', 'Arabian House', 'Telugu Music', 'Sinhala Music', 'Zulu Music',
+        'Ubuntu Music', 'Kizomba', 'Lambada', 'Phonk', 'Trance', 'German Trance', 'Latin Trance', 'Italo Disco',
+        'Disco Polo', 'Latino Disco', 'French Chanson', 'Tango', 'Latin Blues', 'Progressive House Night Drive',
+        'Turkish Deep House', 'Portuguese Pop Ballad', 'Sertanejo', 'Samba', 'Bossa Nova', 'Mariachi',
+        'Jazz Groove', 'Latin Jazz Groove', 'Darbuka', 'Turkish Sufi Rock', 'Shaabi', 'Nuevo Flamenco',
+        'Baul', 'Brazilian Funk', 'Vintage Latino'
+    ];
+
     let activeMode = 'deepdive';
 
     const ICONS = {
@@ -39,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const FOOTER_TEXT = {
-        research: 'Open a YouTube channel\'s Videos tab, then click Start.',
+        research: 'Open any YouTube page, pick niches, then click Start. <br> Keep the tab active while scraping. Try 1–2 niches first.',
         deepdive: 'Open a YouTube channel page (/videos), then click Start. <br> Keep the tab active while scraping to get comment counts.',
     };
 
@@ -58,13 +85,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         footerText.innerHTML = FOOTER_TEXT[activeMode] || FOOTER_TEXT.research;
 
-        // Settings only visible in deepdive and when not scraping
+        // Settings panels only when not scraping; each mode shows its own
         const scraping = startButton.disabled;
-        if (activeMode === 'deepdive' && !scraping) {
-            settingsWrap.style.display = '';
-        } else {
-            settingsWrap.style.display = 'none';
-        }
+        settingsWrap.style.display = (activeMode === 'deepdive' && !scraping) ? '' : 'none';
+        nicheWrap.style.display = (activeMode === 'research' && !scraping) ? '' : 'none';
         // Results only for research
         if (activeMode !== 'research') {
             resultsWrap.style.display = 'none';
@@ -132,6 +156,71 @@ document.addEventListener('DOMContentLoaded', () => {
     filterFrom.addEventListener('change', saveDeepidiveOptions);
     filterTo.addEventListener('change', saveDeepidiveOptions);
 
+    // ── Research Niche options ──
+    function addNicheCheckbox(niche, checked) {
+        if ([...nicheList.querySelectorAll('input')].some(i => i.value === niche)) return;
+        const label = document.createElement('label');
+        label.className = 'column-toggle-label';
+        label.title = niche;
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = niche;
+        cb.checked = !!checked;
+        cb.addEventListener('change', saveNicheConfig);
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' ' + niche));
+        nicheList.appendChild(label);
+    }
+
+    function getSelectedNiches() {
+        return [...nicheList.querySelectorAll('input:checked')].map(i => i.value);
+    }
+
+    function updateNicheSummary() {
+        nicheSummary.textContent = `${getSelectedNiches().length} selected`;
+    }
+
+    function saveNicheConfig() {
+        updateNicheSummary();
+        chrome.storage.local.set({
+            nicheSelection: getSelectedNiches(),
+            nicheAllOptions: [...nicheList.querySelectorAll('input')].map(i => i.value),
+            nicheChannelsPerNiche: parseInt(nicheChannelsPerNiche.value, 10) || 10,
+            nicheSuffix: nicheSuffix.value,
+            nicheDateFilter: nicheDateFilter.value
+        });
+    }
+
+    nicheAccordionHeader.addEventListener('click', () => {
+        const open = nichePanel.style.display !== 'none';
+        nichePanel.style.display = open ? 'none' : '';
+        nicheArrow.textContent = open ? '▼' : '▲';
+    });
+
+    nicheAddBtn.addEventListener('click', () => {
+        const val = nicheAddInput.value.trim();
+        if (!val) return;
+        addNicheCheckbox(val, true);
+        nicheAddInput.value = '';
+        saveNicheConfig();
+    });
+    nicheAddInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); nicheAddBtn.click(); }
+    });
+
+    nicheSelectAll.addEventListener('click', () => {
+        nicheList.querySelectorAll('input').forEach(i => { i.checked = true; });
+        saveNicheConfig();
+    });
+    nicheSelectNone.addEventListener('click', () => {
+        nicheList.querySelectorAll('input').forEach(i => { i.checked = false; });
+        saveNicheConfig();
+    });
+
+    nicheChannelsPerNiche.addEventListener('input', saveNicheConfig);
+    nicheSuffix.addEventListener('input', saveNicheConfig);
+    nicheDateFilter.addEventListener('change', saveNicheConfig);
+
     // ── Status card helpers ──
     function showStatusCard(label, sub, iconName, dotColor) {
         statusCardWrap.style.display = '';
@@ -149,6 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
         statusCardWrap.style.display = 'none';
         progressCardWrap.style.display = '';
         settingsWrap.style.display = 'none';
+        nicheWrap.style.display = 'none';
 
         progressCount.textContent = countText || 'Working…';
         progressTitle.textContent = titleText || '';
@@ -175,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const s = (status || '').toLowerCase();
         if (s.includes('done') || s.includes('complete')) {
-            showStatusCard('Complete', 'Scraping finished successfully', 'check', '#16a34a');
+            showStatusCard('Complete', status || 'Scraping finished successfully', 'check', '#16a34a');
             if (activeMode === 'research' && result) renderResearchResults(result);
         } else if (s.includes('error') || s.includes('fail') || s.includes('injection')) {
             showStatusCard(status, 'Check the console for details', 'error', '#f59e0b');
@@ -190,6 +280,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (activeMode === 'deepdive') {
             settingsWrap.style.display = '';
+        }
+        if (activeMode === 'research') {
+            nicheWrap.style.display = '';
         }
     }
 
@@ -286,6 +379,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Buttons ──
     startButton.addEventListener('click', () => {
+        if (activeMode === 'research') {
+            const niches = getSelectedNiches();
+            if (niches.length === 0) {
+                showStatusCard('No niches selected', 'Pick at least one niche to research', 'error', '#f59e0b');
+                return;
+            }
+            const researchConfig = {
+                niches,
+                channelsPerNiche: parseInt(nicheChannelsPerNiche.value, 10) || 10,
+                suffix: nicheSuffix.value.trim(),
+                dateFilter: nicheDateFilter.value
+            };
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            resultsWrap.style.display = 'none';
+            showProgressCard('Starting…', '', 0);
+            chrome.runtime.sendMessage({ action: 'startScraping', mode: 'research', researchConfig }, () => {
+                if (chrome.runtime.lastError) updateUI(false, 'Error: Failed to start');
+            });
+            return;
+        }
+
         const deepdiveOptions = {};
         deepdiveOptionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
             deepdiveOptions[cb.value] = cb.checked;
@@ -323,6 +438,7 @@ document.addEventListener('DOMContentLoaded', () => {
             progressCardWrap.style.display = '';
             statusCardWrap.style.display = 'none';
             settingsWrap.style.display = 'none';
+            nicheWrap.style.display = 'none';
 
             progressCount.textContent = request.countText || 'Working…';
             progressTitle.textContent = request.phase || '';
@@ -343,10 +459,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Initial load ──
-    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress'], (r) => {
+    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter'], (r) => {
         activeMode = r.activeMode || 'deepdive';
 
         applyTheme(r.theme || 'dark');
+
+        // Restore research niche config (presets + any custom niches added before)
+        const allNiches = (r.nicheAllOptions && r.nicheAllOptions.length) ? r.nicheAllOptions : NICHE_PRESETS;
+        const selected = new Set(r.nicheSelection || []); // empty = nothing checked by default
+        nicheList.innerHTML = '';
+        allNiches.forEach(n => addNicheCheckbox(n, selected.has(n)));
+        updateNicheSummary();
+        if (r.nicheChannelsPerNiche) nicheChannelsPerNiche.value = r.nicheChannelsPerNiche;
+        nicheSuffix.value = (r.nicheSuffix != null && r.nicheSuffix !== '') ? r.nicheSuffix : `mix ${new Date().getFullYear()}`;
+        if (r.nicheDateFilter) nicheDateFilter.value = r.nicheDateFilter;
 
         // Restore deepdive options
         if (r.deepdiveOptions) {

@@ -126,6 +126,50 @@
         </div>
     </div>
 
+    <!-- Settings (Research Niche only) -->
+    <div class="settings-wrap" id="nicheWrap" style="display:none">
+        <div class="settings-row">
+            <span class="settings-label">Channels</span>
+            <div class="filter-date-row">
+                <input type="number" id="nicheChannelsPerNiche" min="1" max="50" value="10" class="filter-input">
+                <span class="filter-hint">per niche</span>
+            </div>
+        </div>
+        <div class="settings-row">
+            <span class="settings-label">Keyword</span>
+            <div class="filter-date-row">
+                <span class="filter-hint">[niche]</span>
+                <input type="text" id="nicheSuffix" class="filter-input" style="width:130px" placeholder="mix 2026">
+            </div>
+        </div>
+        <div class="settings-row">
+            <span class="settings-label">Uploaded</span>
+            <select id="nicheDateFilter" class="filter-input" style="width:auto">
+                <option value="EgIIAg%3D%3D">Today</option>
+                <option value="EgIIAw%3D%3D" selected>This week</option>
+                <option value="EgIIBA%3D%3D">This month</option>
+                <option value="EgIIBQ%3D%3D">This year</option>
+            </select>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="settings-row settings-accordion-header" id="nicheAccordionHeader">
+            <span class="settings-label">Niches</span>
+            <span class="accordion-summary" id="nicheSummary">0 selected</span>
+            <span class="accordion-arrow" id="nicheArrow">&#9660;</span>
+        </div>
+        <div id="nichePanel" style="display:none">
+            <div class="niche-toolbar">
+                <button type="button" class="niche-mini-btn" id="nicheSelectAll">Select all</button>
+                <button type="button" class="niche-mini-btn" id="nicheSelectNone">None</button>
+            </div>
+            <div class="niche-add-row">
+                <input type="text" id="nicheAddInput" class="filter-input" style="flex:1" placeholder="Add custom niche…">
+                <button type="button" class="niche-mini-btn" id="nicheAddBtn">Add</button>
+            </div>
+            <div class="niche-list" id="nicheList"></div>
+        </div>
+    </div>
+
     <!-- Buttons -->
     <div class="btn-group">
         <button class="btn btn-primary" id="startButton">

@@ -1,3 +1,4 @@
+## Research Competitor
 Channel Info
 - [x] Channel name
 - [x] Description
@@ -15,3 +16,12 @@ Videos Info
 - [x] Trascript
 - [x] Like
 - [x] Comment
+
+## Research Niche
+- [x] Setelah selesai kembali ke Youtube.com
+- [x] URL
+- [x] Latest 5 Video View
+- [x] Popular View
+- [x] Oldest Date Upload
+- [x] Niche di paling kiri
+- [x] Hapus kolom "Channel Name"

@@ -578,6 +578,42 @@ body {
     white-space: nowrap;
 }
 
+/* ── Research Niche panel ── */
+.niche-toolbar, .niche-add-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 0 4px 50px;
+}
+
+.niche-mini-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    color: var(--color);
+    font-size: 11px;
+    font-family: inherit;
+    padding: 4px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter 0.12s;
+}
+.niche-mini-btn:hover { filter: brightness(1.25); }
+
+.niche-list {
+    max-height: 168px;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px 8px;
+    padding: 6px 4px 6px 50px;
+}
+
+.niche-list .column-toggle-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* ── Animations ── */
 @keyframes spin {
     to { transform: rotate(360deg); }

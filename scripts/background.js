@@ -43,12 +43,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 mode: request.mode,
                 deepdiveOptions: request.deepdiveOptions || {},
                 videoFilter: request.videoFilter || { mode: 'all' },
+                researchConfig: request.researchConfig || null,
                 researchResult: null,
                 deepdiveData: [],
                 lastProgress: null,
                 scrapePhase: null,
                 videoFinishTimes: [],
-                lastEtaSeconds: null
+                lastEtaSeconds: null,
+                // Research-niche batch state
+                researchPhase: null,
+                nicheQueue: [],
+                nicheIndex: 0,
+                nicheChannelQueue: [],
+                nicheChannelIndex: 0,
+                nicheResults: [],
+                nicheCurrentRow: null,
+                doneChannels: 0,
+                estTotalChannels: 0
             });
             setScrapingState(true, 'Starting...');
             injectToTab(tabId, request);
@@ -105,13 +116,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     else if (request.action === 'scrapingJobDone') {
-        chrome.storage.local.get(['mode', 'researchResult', 'deepdiveChannelData', 'deepdiveVideoData', 'deepdiveOptions'], (r) => {
+        chrome.storage.local.get(['mode', 'researchResult', 'nicheResults', 'nicheQueue', 'deepdiveChannelData', 'deepdiveVideoData', 'deepdiveOptions'], (r) => {
             chrome.storage.local.set({ lastProgress: null });
 
             if (r.mode === 'research') {
-                const result = r.researchResult || request.result;
-                chrome.storage.local.set({ researchResult: result });
-                setScrapingState(false, 'Done!', { result });
+                const rows = r.nicheResults || [];
+                const nicheCount = (r.nicheQueue || []).length;
+                if (rows.length > 0) {
+                    const csv = generateNicheCSV(rows);
+                    const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+                    chrome.downloads.download({ url: dataUrl, filename: `yt-niche-research_${Date.now()}.csv`, saveAs: false });
+                    setScrapingState(false, `Done! ${rows.length} channels from ${nicheCount} niche${nicheCount > 1 ? 's' : ''}.`);
+                } else {
+                    setScrapingState(false, 'Done! (no channels found)');
+                }
+                // Navigate back to YouTube home
+                chrome.storage.local.get(['scrapingTabId'], (t) => {
+                    if (t.scrapingTabId) chrome.tabs.update(t.scrapingTabId, { url: 'https://www.youtube.com/' });
+                });
                 return;
             }
 
@@ -172,6 +194,45 @@ function generateChannelInfoCSV(info) {
         escape(info.channelUrl), escape(info.country), escape(info.joinedDate), escape(info.channelDescription)
     ].join(',');
     return [headers.join(','), row].join('\n');
+}
+
+function parseNumStr(val) {
+    if (val == null) return '';
+    const s = String(val).trim().toLowerCase().replace(/,/g, '');
+    const m = s.match(/^([\d.]+)\s*([kmb])?/);
+    if (!m) return '';
+    const n = parseFloat(m[1]);
+    if (isNaN(n)) return '';
+    if (m[2] === 'k') return Math.round(n * 1000);
+    if (m[2] === 'm') return Math.round(n * 1000000);
+    if (m[2] === 'b') return Math.round(n * 1000000000);
+    return Math.round(n);
+}
+
+function relativeToDays(dateStr) {
+    if (!dateStr) return '';
+    const s = String(dateStr).trim().toLowerCase();
+    const m = s.match(/(\d+)\s*(s|sec|m(?!o)|min|h|hr|hour|d|day|w|wk|week|mo|month|y|yr|year)/);
+    if (!m) return 0; // "X hours ago" or unrecognised → treat as today
+    const n = parseInt(m[1]);
+    const u = m[2];
+    if (u === 's' || u === 'sec' || u === 'm' || u === 'min' || u === 'h' || u === 'hr' || u === 'hour') return 0;
+    if (u === 'd' || u === 'day') return n;
+    if (u === 'w' || u === 'wk' || u === 'week') return n * 7;
+    if (u === 'mo' || u === 'month') return n * 30;
+    if (u === 'y' || u === 'yr' || u === 'year') return n * 365;
+    return '';
+}
+
+function generateNicheCSV(rows) {
+    const headers = ['Niche', 'Channel URL', 'Avg Views (5 Latest)', 'Latest Upload Date', 'Most Popular Views', 'Oldest Upload Date', 'Oldest Upload Date (days)'];
+    const csvRows = rows.map(v => [
+        escape(v.niche), escape(v.channelUrl),
+        escape(parseNumStr(v.avgViews)), escape(v.latestDate),
+        escape(parseNumStr(v.popularViews)), escape(v.oldestDate),
+        escape(relativeToDays(v.oldestDate))
+    ].join(','));
+    return [headers.join(','), ...csvRows].join('\n');
 }
 
 function generateVideoDataCSV(videoList, opts) {
