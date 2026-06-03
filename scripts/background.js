@@ -69,8 +69,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     else if (request.action === 'stopScraping') {
-        chrome.storage.local.get(['scrapingTabId'], (r) => {
-            setScrapingState(false, 'Stopped.');
+        chrome.storage.local.get(['scrapingTabId', 'mode', 'nicheResults', 'nicheQueue'], (r) => {
+            // Export whatever was collected before stopping
+            if (r.mode === 'research') {
+                const rows = r.nicheResults || [];
+                if (rows.length > 0) {
+                    const csv = generateNicheCSV(rows);
+                    const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+                    chrome.downloads.download({ url: dataUrl, filename: `yt-niche-research_partial_${Date.now()}.csv`, saveAs: false });
+                    setScrapingState(false, `Stopped. ${rows.length} channels exported.`);
+                } else {
+                    setScrapingState(false, 'Stopped. (no data yet)');
+                }
+            } else {
+                setScrapingState(false, 'Stopped.');
+            }
             if (r.scrapingTabId) {
                 injectToTab(r.scrapingTabId, { action: 'stopScraping' });
             }

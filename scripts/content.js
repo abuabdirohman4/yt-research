@@ -549,7 +549,7 @@ async function runNicheResearch() {
         if (phase === 'search' && pageType === 'search-results') {
             const nicheIdx = state.nicheIndex || 0;
             const niche = queue[nicheIdx];
-            sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length}`, `Searching "${niche}"…`);
+            sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length}: ${niche}`, `Searching…`);
             const channels = await extractChannelsFromSearch(cfg.channelsPerNiche || 10);
             if (window.ytResearchStopRequested) { chrome.runtime.sendMessage({ action: 'scrapingJobDone' }); return; }
             if (channels.length === 0) {
@@ -574,7 +574,7 @@ async function runNicheResearch() {
             const ch = chQueue[chIdx];
             const nicheIdx = state.nicheIndex || 0;
             const niche = queue[nicheIdx];
-            sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length} · Ch ${chIdx + 1}/${chQueue.length}`, `Scraping latest videos…`);
+            sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length}: ${niche}`, `Ch ${chIdx + 1}/${chQueue.length} · Latest videos…`);
             await waitForVideos();
             await clickChipAndWait('Latest'); // ensure Latest chip active (no-op if no chips)
 
@@ -599,6 +599,9 @@ async function runNicheResearch() {
         // ── CHANNEL POPULAR: most-viewed video ──
         if (phase === 'channel-popular') {
             const ch = (state.nicheChannelQueue || [])[state.nicheChannelIndex || 0];
+            const _popNicheIdx = state.nicheIndex || 0;
+            const _popChIdx = state.nicheChannelIndex || 0;
+            sendNicheProgress(state, `Niche ${_popNicheIdx + 1}/${queue.length}: ${queue[_popNicheIdx]}`, `Ch ${_popChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Popular video…`);
             await waitForVideos();
             const hasChips = await clickChipAndWait('Popular');
             let popularViews = '';
@@ -629,6 +632,9 @@ async function runNicheResearch() {
 
         // ── CHANNEL OLDEST: finalize row, advance ──
         if (phase === 'channel-oldest') {
+            const _oldNicheIdx = state.nicheIndex || 0;
+            const _oldChIdx = state.nicheChannelIndex || 0;
+            sendNicheProgress(state, `Niche ${_oldNicheIdx + 1}/${queue.length}: ${queue[_oldNicheIdx]}`, `Ch ${_oldChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Oldest video…`);
             await waitForVideos();
             const hasChips = await clickChipAndWait('Oldest');
             let oldestDate = '';
