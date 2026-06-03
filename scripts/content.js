@@ -569,6 +569,13 @@ async function extractChannelsFromSearch(limit, label = '?') {
     return channels.slice(0, limit);
 }
 
+// Header line for progress. URL-mode niches are blank → show "Channels" instead of "Niche i/N: ".
+function nicheCountLabel(queue, idx) {
+    const label = queue[idx];
+    if (!label) return `Channels`;
+    return `Niche ${idx + 1}/${queue.length}: ${label}`;
+}
+
 function sendNicheProgress(state, countText, phaseText) {
     const done = state.doneChannels || 0;
     const est = state.estTotalChannels || 0;
@@ -690,7 +697,7 @@ async function runNicheResearch() {
             const ch = chQueue[chIdx];
             const nicheIdx = state.nicheIndex || 0;
             const niche = queue[nicheIdx];
-            sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length}: ${niche}`, `Ch ${chIdx + 1}/${chQueue.length} · Latest videos…`);
+            sendNicheProgress(state, nicheCountLabel(queue, nicheIdx), `Ch ${chIdx + 1}/${chQueue.length} · Latest videos…`);
             await waitForVideos();
             await clickChipAndWait('Latest'); // ensure Latest chip active (no-op if no chips)
 
@@ -718,7 +725,7 @@ async function runNicheResearch() {
             const ch = (state.nicheChannelQueue || [])[state.nicheChannelIndex || 0];
             const _popNicheIdx = state.nicheIndex || 0;
             const _popChIdx = state.nicheChannelIndex || 0;
-            sendNicheProgress(state, `Niche ${_popNicheIdx + 1}/${queue.length}: ${queue[_popNicheIdx]}`, `Ch ${_popChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Popular video…`);
+            sendNicheProgress(state, nicheCountLabel(queue, _popNicheIdx), `Ch ${_popChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Popular video…`);
             await waitForVideos();
             await clickChipAndWait('Popular'); // load popular-sorted videos (best effort)
             // Don't trust chip sort — parse all and pick highest views ourselves
@@ -741,7 +748,7 @@ async function runNicheResearch() {
         if (phase === 'channel-oldest') {
             const _oldNicheIdx = state.nicheIndex || 0;
             const _oldChIdx = state.nicheChannelIndex || 0;
-            sendNicheProgress(state, `Niche ${_oldNicheIdx + 1}/${queue.length}: ${queue[_oldNicheIdx]}`, `Ch ${_oldChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Oldest video…`);
+            sendNicheProgress(state, nicheCountLabel(queue, _oldNicheIdx), `Ch ${_oldChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Oldest video…`);
             await waitForVideos();
             await clickChipAndWait('Oldest'); // load oldest-sorted videos (best effort)
             // Don't trust chip sort — parse all and pick the genuinely oldest by date ourselves
@@ -1074,7 +1081,7 @@ async function runScraping(mode, deepdiveOptions, researchConfig) {
                 return;
             }
             await chrome.storage.local.set({
-                nicheQueue: ['Manual'], nicheIndex: 0,
+                nicheQueue: [''], nicheIndex: 0,
                 nicheChannelQueue: channels, nicheChannelIndex: 0,
                 nicheResults: [], researchPhase: 'channel-latest',
                 estTotalChannels: channels.length, doneChannels: 0, nicheCurrentRow: null

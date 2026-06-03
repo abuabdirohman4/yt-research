@@ -237,10 +237,29 @@ function relativeToDays(dateStr) {
     return '';
 }
 
+// Niche order mirrors docs/list_niche.md and popup.js NICHE_PRESETS.
+// Used to print a stable niche number in the "No." CSV column.
+const NICHE_PRESETS = [
+    'EDM', 'Reggaeton English', 'Reggaeton Latino', 'HipHop', 'Bachata', 'Jazz', 'Rock', 'Country',
+    'Pop Ballad', 'Cubano Jazz', 'Deep House', 'Bollywood Pop Romance', 'Mediterranean Music',
+    'Italiano Vintage', 'Amapiano', 'Afro House', 'Afro Soul', 'Afrobeat Tribal', 'Flamenco Rumba',
+    'Flamenco Oud Andalusia', 'Cumbia', 'Arabian House', 'Telugu Music', 'Sinhala Music', 'Zulu Music',
+    'Ubuntu Music', 'Kizomba', 'Lambada', 'Phonk', 'Trance', 'German Trance', 'Latin Trance', 'Italo Disco',
+    'Disco Polo', 'Latino Disco', 'French Chanson', 'Tango', 'Latin Blues', 'Progressive House Night Drive',
+    'Turkish Deep House', 'Portuguese Pop Ballad', 'Sertanejo', 'Samba', 'Bossa Nova', 'Mariachi',
+    'Jazz Groove', 'Latin Jazz Groove', 'Darbuka', 'Turkish Sufi Rock', 'Shaabi', 'Nuevo Flamenco',
+    'Baul', 'Brazilian Funk', 'Vintage Latino'
+];
+
+function nicheNumber(label) {
+    const idx = NICHE_PRESETS.indexOf(label);
+    return idx === -1 ? '' : String(idx + 1);
+}
+
 function generateNicheCSV(rows) {
-    const headers = ['Niche', 'Channel URL', 'Avg Views (5 Latest)', 'Latest Upload Date', 'Most Popular Views', 'Oldest Upload Date', 'Oldest Upload Date (days)'];
+    const headers = ['No.', 'Niche', 'Channel URL', 'Avg Views (5 Latest)', 'Latest Upload Date', 'Most Popular Views', 'Oldest Upload Date', 'Oldest Upload Date (days)'];
     const csvRows = rows.map(v => [
-        escape(v.niche), escape(v.channelUrl),
+        escape(nicheNumber(v.niche)), escape(v.niche), escape(v.channelUrl),
         escape(parseNumStr(v.avgViews)), escape(v.latestDate),
         escape(parseNumStr(v.popularViews)), escape(v.oldestDate),
         escape(relativeToDays(v.oldestDate))
