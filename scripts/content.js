@@ -6,10 +6,14 @@ function getPageType() {
     const sort = urlObj.searchParams.get('sort');
 
     const isChannelVideos = /youtube\.com\/@[^/?#]+\/videos/.test(url)
-        || /youtube\.com\/channel\/[^/?#]+\/videos/.test(url);
+        || /youtube\.com\/channel\/[^/?#]+\/videos/.test(url)
+        || /youtube\.com\/user\/[^/?#]+\/videos/.test(url)
+        || /youtube\.com\/c\/[^/?#]+\/videos/.test(url);
 
     const isChannelHome = /youtube\.com\/@[^/?#]+\/?(?:[?#]|$)/.test(url)
-        || /youtube\.com\/channel\/[^/?#]+\/?(?:[?#]|$)/.test(url);
+        || /youtube\.com\/channel\/[^/?#]+\/?(?:[?#]|$)/.test(url)
+        || /youtube\.com\/user\/[^/?#]+\/?(?:[?#]|$)/.test(url)
+        || /youtube\.com\/c\/[^/?#]+\/?(?:[?#]|$)/.test(url);
 
     const isWatch = /youtube\.com\/watch/.test(url);
     const isSearch = /youtube\.com\/results/.test(url);
@@ -157,7 +161,8 @@ function parseVideoItems(limit) {
         const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
         results.push({ title, views, date, videoUrl, thumbnailUrl });
     }
-    console.log(`[YTResearch] parseVideoItems: ${items.length} items found, ${results.length} with titles`);
+    console.log(`[YTR] parseVideoItems: ${items.length} containers, ${results.length} parsed`,
+        results.slice(0, 6).map(r => `${r.views}|${r.date}`));
     return results;
 }
 
@@ -359,6 +364,10 @@ function normalizeChannelUrl(href) {
     if (m) return 'https://www.youtube.com/' + m[1];
     m = href.match(/\/channel\/([^/?#]+)/);
     if (m) return 'https://www.youtube.com/channel/' + m[1];
+    m = href.match(/\/user\/([^/?#]+)/);
+    if (m) return 'https://www.youtube.com/user/' + m[1];
+    m = href.match(/\/c\/([^/?#]+)/);
+    if (m) return 'https://www.youtube.com/c/' + m[1];
     return null;
 }
 
@@ -371,50 +380,103 @@ function getChannelNameFromPage() {
     return (el.content || el.textContent || '').trim();
 }
 
+// Wait until video items are actually rendered (titles populated), not just containers present.
+// YouTube lazy-renders items; parsing too early yields only 1 item.
+async function waitForItemsStable(timeout = 8000) {
+    const deadline = Date.now() + timeout;
+    let lastCount = -1, stableSince = 0;
+    while (Date.now() < deadline) {
+        const titled = document.querySelectorAll('h3.ytLockupMetadataViewModelHeadingReset[title]:not([title=""])').length;
+        const containers = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer').length;
+        if (titled > 0 && titled >= containers) return; // all rendered
+        if (titled === lastCount) {
+            if (!stableSince) stableSince = Date.now();
+            if (Date.now() - stableSince >= 800) return; // count stable — good enough
+        } else { lastCount = titled; stableSince = 0; }
+        await sleep(200);
+    }
+}
+
 async function waitForVideos() {
     try {
         await waitForElement('ytd-rich-item-renderer, ytd-grid-video-renderer', 12000);
     } catch (e) { /* no videos — return empty downstream */ }
-    await sleep(1200);
+    await waitForItemsStable();
+    await sleep(300);
 }
 
-// Click a chip tab (Latest/Popular/Oldest) and wait for DOM refresh.
-// Returns true if chip tabs exist, false if channel has no chip tabs (< ~12 videos).
+// Poll until rendered video-title count stops increasing for 600ms, or 10s deadline.
+async function waitForListSettle() {
+    await new Promise((resolve) => {
+        const deadline = Date.now() + 10000;
+        let lastCount = -1, stableAt = 0;
+        const poll = () => {
+            if (Date.now() > deadline) { resolve(); return; }
+            const count = document.querySelectorAll('h3.ytLockupMetadataViewModelHeadingReset[title]:not([title=""])').length;
+            if (count > 0 && count === lastCount) {
+                if (stableAt === 0) stableAt = Date.now();
+                if (Date.now() - stableAt >= 600) { resolve(); return; }
+            } else { lastCount = count; stableAt = 0; }
+            setTimeout(poll, 150);
+        };
+        poll();
+    });
+    await sleep(300);
+}
+
+// Activate a sort (Latest/Popular/Oldest). Handles two YouTube layouts:
+//   1. Standard chip tabs:  button[aria-label="Popular"]
+//   2. Combobox dropdown (membership channels): button[role="combobox"] → dropdown options
+// Returns true if a sort control exists, false if the channel has none (small channels).
 async function clickChipAndWait(label) {
+    // Layout 1 — standard chip tab
     const btn = document.querySelector(`button.ytChipShapeButtonReset[aria-label="${label}"]`);
-    if (!btn) return false;
-    const isActive = btn.getAttribute('aria-selected') === 'true';
-    console.log(`[YTResearch] clickChipAndWait "${label}" isActive=${isActive}`);
-    if (!isActive) {
-        btn.click();
-        await sleep(800);
-        // Wait for lazy-rendered items to stabilise: poll until count of rendered titles
-        // stops increasing for 600ms, or 10s deadline.
-        try {
-            await new Promise((resolve) => {
-                const deadline = Date.now() + 10000;
-                let lastCount = -1;
-                let stableAt = 0;
-                const poll = () => {
-                    if (Date.now() > deadline) { resolve(); return; }
-                    const count = document.querySelectorAll(
-                        'h3.ytLockupMetadataViewModelHeadingReset[title]:not([title=""])'
-                    ).length;
-                    if (count > 0 && count === lastCount) {
-                        if (stableAt === 0) stableAt = Date.now();
-                        if (Date.now() - stableAt >= 600) { resolve(); return; }
-                    } else {
-                        lastCount = count;
-                        stableAt = 0;
-                    }
-                    setTimeout(poll, 150);
-                };
-                poll();
-            });
-        } catch (e) { /* proceed anyway */ }
-        await sleep(300);
+    if (btn) {
+        const isActive = btn.getAttribute('aria-selected') === 'true';
+        console.log(`[YTResearch] clickChipAndWait "${label}" (chip) isActive=${isActive}`);
+        if (!isActive) {
+            btn.click();
+            await sleep(800);
+            try { await waitForListSettle(); } catch (e) {}
+        }
+        return true;
     }
-    return true;
+
+    // Layout 2 — combobox sort dropdown (membership channels)
+    // Dropdown renders in ytd-popup-container as tp-yt-iron-dropdown →
+    //   yt-list-item-view-model[role="menuitem"] → button → span.ytListItemViewModelTitle (text)
+    const combo = document.querySelector('button.ytChipShapeButtonReset[role="combobox"]');
+    if (combo) {
+        const current = combo.textContent.trim().toLowerCase();
+        console.log(`[YTResearch] clickChipAndWait "${label}" (combobox) current="${current}"`);
+        if (current.includes(label.toLowerCase())) return true; // already selected
+        combo.click();
+        // Wait for the dropdown menu items to appear (rendered in a separate popup container)
+        let items = [];
+        for (let i = 0; i < 20; i++) {
+            await sleep(150);
+            items = [...document.querySelectorAll('yt-list-item-view-model[role="menuitem"], tp-yt-iron-dropdown [role="menuitem"]')];
+            if (items.length) break;
+        }
+        const wanted = label.toLowerCase();
+        const opt = items.find(el => {
+            const titleEl = el.querySelector('.ytListItemViewModelTitle') || el;
+            return titleEl.textContent.trim().toLowerCase() === wanted;
+        });
+        if (opt) {
+            // Click the inner button (the actual interactive element), fallback to the item
+            (opt.querySelector('button') || opt).click();
+            await sleep(800);
+            try { await waitForListSettle(); } catch (e) {}
+            return true;
+        }
+        // No matching option — close dropdown
+        combo.click();
+        console.warn(`[YTResearch] combobox option "${label}" not found (${items.length} items seen)`);
+        return false;
+    }
+
+    return false;
 }
 
 // For small channels without chip tabs: sort all video items by views descending, return top N.
@@ -432,26 +494,30 @@ function getOldestFromList(videoList) {
     function ageScore(dateStr) {
         if (!dateStr) return 0;
         const s = dateStr.trim().toLowerCase();
-        const m = s.match(/^(\d+)\s*(minute|hour|day|week|month|year)/);
+        // Handle both short ("13h","7d","2mo","5y") and long ("7 days ago") formats.
+        // Order matters: multi-char units (mo, sec, hr, wk, yr) before single letters.
+        const m = s.match(/(\d+)\s*(mo|sec|min|hr|wk|yr|s|m|h|d|w|y|second|minute|hour|day|week|month|year)/);
         if (!m) return 0;
         const n = parseInt(m[1]);
-        const unit = m[2];
-        if (unit.startsWith('minute')) return n / 1440;
-        if (unit.startsWith('hour')) return n / 24;
-        if (unit.startsWith('day')) return n;
-        if (unit.startsWith('week')) return n * 7;
-        if (unit.startsWith('month')) return n * 30;
-        if (unit.startsWith('year')) return n * 365;
+        const u = m[2];
+        if (u === 'mo' || u === 'month') return n * 30;
+        if (u === 's' || u === 'sec' || u === 'second') return n / 86400;
+        if (u === 'min' || u === 'minute' || u === 'm') return n / 1440;
+        if (u === 'h' || u === 'hr' || u === 'hour') return n / 24;
+        if (u === 'd' || u === 'day') return n;
+        if (u === 'w' || u === 'wk' || u === 'week') return n * 7;
+        if (u === 'y' || u === 'yr' || u === 'year') return n * 365;
         return 0;
     }
     return [...videoList].sort((a, b) => ageScore(b.date) - ageScore(a.date))[0];
 }
 
 // Collect unique uploading channels from search results (video renderers).
-async function extractChannelsFromSearch(limit) {
+async function extractChannelsFromSearch(limit, label = '?') {
     try {
         await waitForElement('ytd-video-renderer, ytd-channel-renderer', 12000);
     } catch (e) {
+        console.log(`[YTR] search "${label}": 0 video-renderers (timeout — likely rate-limited or empty)`);
         return [];
     }
     await sleep(1500);
@@ -466,7 +532,7 @@ async function extractChannelsFromSearch(limit) {
             const a = [...item.querySelectorAll('ytd-channel-name a, #channel-info a, a.yt-simple-endpoint')]
                 .find(x => {
                     const h = x.getAttribute('href') || '';
-                    return h.startsWith('/@') || h.includes('/channel/');
+                    return h.startsWith('/@') || h.includes('/channel/') || h.includes('/user/') || h.includes('/c/');
                 });
             if (!a) continue;
             const url = normalizeChannelUrl(a.getAttribute('href'));
@@ -479,15 +545,27 @@ async function extractChannelsFromSearch(limit) {
     };
 
     let scrolls = 0;
-    while (channels.length < limit && scrolls < 10) {
+    let prevItemCount = 0;
+    let stalled = 0;
+    while (channels.length < limit && scrolls < 15) {
         if (window.ytResearchStopRequested) break;
         if (collect()) break;
         window.scrollTo(0, document.body.scrollHeight);
         await sleep(1500);
         scrolls++;
+        // Stop early only if YouTube has no more results to load (count stable twice)
+        const itemCount = document.querySelectorAll('ytd-video-renderer').length;
+        if (itemCount === prevItemCount) {
+            if (++stalled >= 2) break; // truly exhausted
+        } else {
+            stalled = 0;
+            prevItemCount = itemCount;
+        }
     }
     collect();
-    console.log(`[YTResearch] extractChannelsFromSearch: ${channels.length} unique channels`);
+    const totalRenderers = document.querySelectorAll('ytd-video-renderer').length;
+    // renderers low (<10) → likely rate-limited/empty; renderers high but few channels → dedupe/extraction
+    console.log(`[YTR] search "${label}": ${totalRenderers} video-renderers, ${scrolls} scrolls → ${channels.length} channels`);
     return channels.slice(0, limit);
 }
 
@@ -521,6 +599,37 @@ async function gotoNextNiche(state) {
     chrome.runtime.sendMessage({ action: 'navigateTo', url: buildSearchUrl(queue[nextIdx], cfg.suffix, cfg.dateFilter) });
 }
 
+// Channel page redirected / unhandled URL — save partial row and advance so run doesn't hang.
+async function skipStuckChannel() {
+    if (window.ytResearchNicheRunning) return;
+    window.ytResearchNicheRunning = true;
+    try {
+        const state = await chrome.storage.local.get([
+            'researchConfig', 'nicheQueue', 'nicheIndex', 'nicheChannelQueue',
+            'nicheChannelIndex', 'nicheResults', 'estTotalChannels', 'nicheCurrentRow', 'doneChannels'
+        ]);
+        const results = state.nicheResults || [];
+        // Keep whatever partial data was collected for this channel
+        if (state.nicheCurrentRow && state.nicheCurrentRow.channelUrl) {
+            results.push(state.nicheCurrentRow);
+        }
+        const done = (state.doneChannels || 0) + 1;
+        await chrome.storage.local.set({ nicheResults: results, doneChannels: done });
+
+        const chQueue = state.nicheChannelQueue || [];
+        const nextChIdx = (state.nicheChannelIndex || 0) + 1;
+        if (nextChIdx < chQueue.length && !window.ytResearchStopRequested) {
+            await chrome.storage.local.set({ nicheChannelIndex: nextChIdx, researchPhase: 'channel-latest', nicheCurrentRow: null });
+            await sleep(600);
+            chrome.runtime.sendMessage({ action: 'navigateTo', url: chQueue[nextChIdx].url + '/videos' });
+        } else {
+            await gotoNextNiche({ ...state, nicheResults: results, doneChannels: done });
+        }
+    } finally {
+        window.ytResearchNicheRunning = false;
+    }
+}
+
 async function runNicheResearch() {
     if (window.ytResearchNicheRunning) {
         console.warn('[YTResearch] runNicheResearch already running, ignoring');
@@ -549,8 +658,15 @@ async function runNicheResearch() {
         if (phase === 'search' && pageType === 'search-results') {
             const nicheIdx = state.nicheIndex || 0;
             const niche = queue[nicheIdx];
+            // Elapsed-time log: correlate throttle with request count vs wall-clock
+            const { runStartedAt } = await chrome.storage.local.get(['runStartedAt']);
+            const startedAt = runStartedAt || Date.now();
+            if (!runStartedAt) await chrome.storage.local.set({ runStartedAt: startedAt });
+            const elapsedMin = Math.round((Date.now() - startedAt) / 60000);
+            const approxNav = nicheIdx * ((cfg.channelsPerNiche || 10) * 3 + 1);
+            console.log(`[YTR] niche#${nicheIdx + 1} "${niche}" | elapsed ${elapsedMin}min | ~${approxNav} navigations so far`);
             sendNicheProgress(state, `Niche ${nicheIdx + 1}/${queue.length}: ${niche}`, `Searching…`);
-            const channels = await extractChannelsFromSearch(cfg.channelsPerNiche || 10);
+            const channels = await extractChannelsFromSearch(cfg.channelsPerNiche || 10, niche);
             if (window.ytResearchStopRequested) { chrome.runtime.sendMessage({ action: 'scrapingJobDone' }); return; }
             if (channels.length === 0) {
                 await gotoNextNiche(state);
@@ -581,6 +697,7 @@ async function runNicheResearch() {
             const latest5 = parseVideoItems(5);
             const viewNums = latest5.map(v => parseNumber(v.views)).filter(n => typeof n === 'number' && !isNaN(n));
             const avgViews = viewNums.length ? Math.round(viewNums.reduce((a, b) => a + b, 0) / viewNums.length) : '';
+            console.log('[YTR] latest5 views:', latest5.map(v => v.views), 'avg:', avgViews);
 
             const row = {
                 niche,
@@ -603,26 +720,16 @@ async function runNicheResearch() {
             const _popChIdx = state.nicheChannelIndex || 0;
             sendNicheProgress(state, `Niche ${_popNicheIdx + 1}/${queue.length}: ${queue[_popNicheIdx]}`, `Ch ${_popChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Popular video…`);
             await waitForVideos();
-            const hasChips = await clickChipAndWait('Popular');
-            let popularViews = '';
-            if (hasChips) {
-                let pop = parseVideoItems(1)[0];
-                // Retry once if views empty — tab may have been throttled (background)
-                if (!pop || !pop.views) {
-                    await sleep(2500);
-                    pop = parseVideoItems(1)[0];
-                }
-                popularViews = pop ? pop.views : '';
-            } else {
-                // Small channel — no chip tabs: sort all videos by views, take top 1
-                let allVideos = parseVideoItems(0);
-                if (!allVideos.length || !allVideos.some(v => v.views)) {
-                    await sleep(2500);
-                    allVideos = parseVideoItems(0);
-                }
-                const top = getMostPopularFromList(allVideos, 1)[0];
-                popularViews = top ? top.views : '';
+            await clickChipAndWait('Popular'); // load popular-sorted videos (best effort)
+            // Don't trust chip sort — parse all and pick highest views ourselves
+            let popVideos = parseVideoItems(0);
+            if (!popVideos.length || !popVideos.some(v => v.views)) {
+                await sleep(2500);
+                popVideos = parseVideoItems(0);
             }
+            const topPop = getMostPopularFromList(popVideos, 1)[0];
+            const popularViews = topPop ? topPop.views : '';
+            console.log('[YTR] popular pick:', popularViews || 'none', 'from views:', popVideos.map(v => v.views));
             const row = { ...(state.nicheCurrentRow || {}), popularViews };
             await chrome.storage.local.set({ nicheCurrentRow: row, researchPhase: 'channel-oldest' });
             await sleep(500);
@@ -636,24 +743,16 @@ async function runNicheResearch() {
             const _oldChIdx = state.nicheChannelIndex || 0;
             sendNicheProgress(state, `Niche ${_oldNicheIdx + 1}/${queue.length}: ${queue[_oldNicheIdx]}`, `Ch ${_oldChIdx + 1}/${(state.nicheChannelQueue||[]).length} · Oldest video…`);
             await waitForVideos();
-            const hasChips = await clickChipAndWait('Oldest');
-            let oldestDate = '';
-            if (hasChips) {
-                let old = parseVideoItems(1)[0];
-                if (!old || !old.date) {
-                    await sleep(2500);
-                    old = parseVideoItems(1)[0];
-                }
-                oldestDate = old ? old.date : '';
-            } else {
-                let allVideos = parseVideoItems(0);
-                if (!allVideos.length || !allVideos.some(v => v.date)) {
-                    await sleep(2500);
-                    allVideos = parseVideoItems(0);
-                }
-                const oldest = getOldestFromList(allVideos);
-                oldestDate = oldest ? oldest.date : '';
+            await clickChipAndWait('Oldest'); // load oldest-sorted videos (best effort)
+            // Don't trust chip sort — parse all and pick the genuinely oldest by date ourselves
+            let oldVideos = parseVideoItems(0);
+            if (!oldVideos.length || !oldVideos.some(v => v.date)) {
+                await sleep(2500);
+                oldVideos = parseVideoItems(0);
             }
+            const oldest = getOldestFromList(oldVideos);
+            const oldestDate = oldest ? oldest.date : '';
+            console.log('[YTR] oldest pick:', oldestDate || 'none', 'from dates:', oldVideos.map(v => v.date));
             const row = { ...(state.nicheCurrentRow || {}), oldestDate };
 
             const results = state.nicheResults || [];
@@ -962,8 +1061,31 @@ async function runScraping(mode, deepdiveOptions, researchConfig) {
     console.log(`[YTResearch] runScraping mode=${mode} page=${pageType}`);
 
     if (mode === 'research') {
-        // Niche batch — kicks off from any YouTube page by navigating to the first search
         const cfg = researchConfig || (await chrome.storage.local.get(['researchConfig'])).researchConfig || {};
+
+        // Mode "urls" — user pasted a list of channel URLs; skip search, scrape each directly
+        if (cfg.mode === 'urls') {
+            const channels = (cfg.urls || [])
+                .map(u => ({ url: normalizeChannelUrl(u) || (u.startsWith('http') ? u.replace(/\/videos\/?$/, '') : null), name: '' }))
+                .filter(c => c.url);
+            if (channels.length === 0) {
+                console.error('[YTResearch] No valid channel URLs');
+                chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+                return;
+            }
+            await chrome.storage.local.set({
+                nicheQueue: ['Manual'], nicheIndex: 0,
+                nicheChannelQueue: channels, nicheChannelIndex: 0,
+                nicheResults: [], researchPhase: 'channel-latest',
+                estTotalChannels: channels.length, doneChannels: 0, nicheCurrentRow: null
+            });
+            sendProgress(`Channel 1/${channels.length}`, 'Scraping channels…', 0);
+            await sleep(300);
+            chrome.runtime.sendMessage({ action: 'navigateTo', url: channels[0].url + '/videos' });
+            return;
+        }
+
+        // Niche batch — kicks off from any YouTube page by navigating to the first search
         const niches = (cfg.niches || []).filter(Boolean);
         if (niches.length === 0) {
             console.error('[YTResearch] No niches selected');
@@ -973,7 +1095,8 @@ async function runScraping(mode, deepdiveOptions, researchConfig) {
         const estTotalChannels = niches.length * (cfg.channelsPerNiche || 10);
         await chrome.storage.local.set({
             nicheQueue: niches, nicheIndex: 0, nicheChannelQueue: [], nicheChannelIndex: 0,
-            nicheResults: [], researchPhase: 'search', estTotalChannels, doneChannels: 0, nicheCurrentRow: null
+            nicheResults: [], researchPhase: 'search', estTotalChannels, doneChannels: 0, nicheCurrentRow: null,
+            runStartedAt: Date.now()
         });
         sendProgress(`Niche 1/${niches.length}`, `Searching "${niches[0]}"…`, 0);
         await sleep(300);
@@ -1037,12 +1160,17 @@ if (!window.ytResearchLoaded) {
             // Trust researchPhase from storage, not URL-derived pageType for those phases.
             const shouldContinue =
                 (rp === 'search' && pageType === 'search-results') ||
-                (rp === 'channel-latest' && pageType === 'channel-videos-latest') ||
+                (rp === 'channel-latest' && isChannelPage) ||
                 (rp === 'channel-popular' && isChannelPage) ||
                 (rp === 'channel-oldest' && isChannelPage);
 
             if (shouldContinue) {
                 runNicheResearch();
+            } else if (rp && rp.startsWith('channel-') && !isChannelPage) {
+                // Landed on an unexpected page (redirect, /user/ home, 'other').
+                // Don't hang the whole run — skip this channel and move on.
+                console.warn(`[YTResearch] Research stuck on page=${pageType} for phase=${rp}, skipping channel`);
+                skipStuckChannel();
             }
             return;
         }

@@ -614,6 +614,21 @@ body {
     text-overflow: ellipsis;
 }
 
+.niche-url-textarea {
+    width: calc(100% - 8px);
+    margin: 4px 4px 0 4px;
+    min-height: 120px;
+    resize: vertical;
+    background: var(--bg2, #2a2a2a);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--color);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 8px;
+}
+
 /* ── Animations ── */
 @keyframes spin {
     to { transform: rotate(360deg); }

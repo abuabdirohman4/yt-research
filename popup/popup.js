@@ -45,6 +45,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const nicheAddBtn = document.getElementById('nicheAddBtn');
     const nicheSelectAll = document.getElementById('nicheSelectAll');
     const nicheSelectNone = document.getElementById('nicheSelectNone');
+    const nicheByNicheBlock = document.getElementById('nicheByNicheBlock');
+    const nicheByUrlBlock = document.getElementById('nicheByUrlBlock');
+    const manualUrls = document.getElementById('manualUrls');
+    const manualUrlCount = document.getElementById('manualUrlCount');
 
     const NICHE_PRESETS = [
         'EDM', 'Reggaeton English', 'Reggaeton Latino', 'HipHop', 'Bachata', 'Jazz', 'Rock', 'Country',
@@ -221,6 +225,33 @@ document.addEventListener('DOMContentLoaded', () => {
     nicheSuffix.addEventListener('input', saveNicheConfig);
     nicheDateFilter.addEventListener('change', saveNicheConfig);
 
+    // ── Research source mode (By Niche / By Channel URLs) ──
+    function getResearchMode() {
+        return document.querySelector('input[name="researchMode"]:checked')?.value || 'niche';
+    }
+
+    function parseManualUrls() {
+        return manualUrls.value.split('\n').map(s => s.trim()).filter(Boolean);
+    }
+
+    function updateResearchModeUI() {
+        const m = getResearchMode();
+        nicheByNicheBlock.style.display = m === 'niche' ? '' : 'none';
+        nicheByUrlBlock.style.display = m === 'urls' ? '' : 'none';
+        if (m === 'urls') manualUrlCount.textContent = `${parseManualUrls().length} URLs`;
+    }
+
+    document.querySelectorAll('input[name="researchMode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            updateResearchModeUI();
+            chrome.storage.local.set({ researchSourceMode: getResearchMode() });
+        });
+    });
+    manualUrls.addEventListener('input', () => {
+        manualUrlCount.textContent = `${parseManualUrls().length} URLs`;
+        chrome.storage.local.set({ manualUrls: manualUrls.value });
+    });
+
     // ── Status card helpers ──
     function showStatusCard(label, sub, iconName, dotColor) {
         statusCardWrap.style.display = '';
@@ -380,17 +411,28 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Buttons ──
     startButton.addEventListener('click', () => {
         if (activeMode === 'research') {
-            const niches = getSelectedNiches();
-            if (niches.length === 0) {
-                showStatusCard('No niches selected', 'Pick at least one niche to research', 'error', '#f59e0b');
-                return;
+            let researchConfig;
+            if (getResearchMode() === 'urls') {
+                const urls = parseManualUrls();
+                if (urls.length === 0) {
+                    showStatusCard('No URLs', 'Paste at least one channel URL', 'error', '#f59e0b');
+                    return;
+                }
+                researchConfig = { mode: 'urls', urls };
+            } else {
+                const niches = getSelectedNiches();
+                if (niches.length === 0) {
+                    showStatusCard('No niches selected', 'Pick at least one niche to research', 'error', '#f59e0b');
+                    return;
+                }
+                researchConfig = {
+                    mode: 'niche',
+                    niches,
+                    channelsPerNiche: parseInt(nicheChannelsPerNiche.value, 10) || 10,
+                    suffix: nicheSuffix.value.trim(),
+                    dateFilter: nicheDateFilter.value
+                };
             }
-            const researchConfig = {
-                niches,
-                channelsPerNiche: parseInt(nicheChannelsPerNiche.value, 10) || 10,
-                suffix: nicheSuffix.value.trim(),
-                dateFilter: nicheDateFilter.value
-            };
             startButton.disabled = true;
             stopButton.disabled = false;
             resultsWrap.style.display = 'none';
@@ -459,7 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Initial load ──
-    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter'], (r) => {
+    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter', 'researchSourceMode', 'manualUrls'], (r) => {
         activeMode = r.activeMode || 'deepdive';
 
         applyTheme(r.theme || 'dark');
@@ -473,6 +515,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (r.nicheChannelsPerNiche) nicheChannelsPerNiche.value = r.nicheChannelsPerNiche;
         nicheSuffix.value = (r.nicheSuffix != null && r.nicheSuffix !== '') ? r.nicheSuffix : `mix ${new Date().getFullYear()}`;
         if (r.nicheDateFilter) nicheDateFilter.value = r.nicheDateFilter;
+
+        // Restore research source mode + manual URLs
+        if (r.manualUrls) manualUrls.value = r.manualUrls;
+        const srcMode = r.researchSourceMode || 'niche';
+        const srcRadio = document.querySelector(`input[name="researchMode"][value="${srcMode}"]`);
+        if (srcRadio) srcRadio.checked = true;
+        updateResearchModeUI();
 
         // Restore deepdive options
         if (r.deepdiveOptions) {
