@@ -25,3 +25,6 @@ Videos Info
 - [x] Oldest Date Upload
 - [x] Niche di paling kiri
 - [x] Hapus kolom "Channel Name"
+- [ ] Popup debugging
+- [ ] Langsung sorting oldest -> avg view
+- [ ] Kalau oldest ada spesifik jam, buat agar di (days) nya bisa pakai nilai koma, sehingga tetap bisa tersorting dengan baik, mana yang lebih duluan

@@ -3,8 +3,14 @@
   "name": "YT Research",
   "version": "1.0.0",
   "description": "Research YouTube channels — quick overview or full competitor deep dive.",
-  "permissions": ["storage", "activeTab", "scripting", "downloads"],
+  "permissions": ["storage", "activeTab", "scripting", "downloads", "windows"],
   "host_permissions": ["*://www.youtube.com/*"],
+  "web_accessible_resources": [
+    {
+      "resources": ["results/results.html", "results/results.js", "results/results.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

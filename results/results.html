@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YT Research · Live Results</title>
+    <link rel="stylesheet" href="results.css">
+</head>
+<body>
+    <div id="header">
+        <h1>YT Research · Live Results</h1>
+        <span id="status">Waiting for scrape to start…</span>
+    </div>
+    <div id="legend">
+        🔴 data suspect (empty views / oldest &lt;30d) &nbsp;·&nbsp; ⚠ niche got fewer channels than target
+    </div>
+    <div id="scroll-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>No.</th>
+                    <th>Niche</th>
+                    <th>Channel</th>
+                    <th>Avg Views</th>
+                    <th>Popular</th>
+                    <th>Oldest</th>
+                </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+        </table>
+        <div id="empty">Waiting for first channel…</div>
+    </div>
+    <script src="results.js"></script>
+</body>
+</html>

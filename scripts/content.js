@@ -87,6 +87,27 @@ function parseNumber(val) {
     return Math.round(num);
 }
 
+
+// Shared date-age scorer. Returns fractional days (higher = older).
+// Handles short ("13h","7d","2mo","5y") and long ("7 days ago") formats.
+// Multi-char units (mo, sec, hr, wk, yr) matched before single letters.
+function ageScore(dateStr) {
+    if (!dateStr) return 0;
+    const s = dateStr.trim().toLowerCase();
+    const m = s.match(/(\d+)\s*(mo|sec|min|hr|wk|yr|s|m|h|d|w|y|second|minute|hour|day|week|month|year)/);
+    if (!m) return 0;
+    const n = parseInt(m[1]);
+    const u = m[2];
+    if (u === 'mo' || u === 'month') return n * 30;
+    if (u === 's' || u === 'sec' || u === 'second') return n / 86400;
+    if (u === 'min' || u === 'minute' || u === 'm') return n / 1440;
+    if (u === 'h' || u === 'hr' || u === 'hour') return n / 24;
+    if (u === 'd' || u === 'day') return n;
+    if (u === 'w' || u === 'wk' || u === 'week') return n * 7;
+    if (u === 'y' || u === 'yr' || u === 'year') return n * 365;
+    return 0;
+}
+
 function waitForElement(selector, timeout = 15000) {
     return new Promise((resolve, reject) => {
         const existing = document.querySelector(selector);
@@ -487,28 +508,9 @@ function getMostPopularFromList(videoList, n) {
 }
 
 // For small channels: approximate oldest by extracting numeric value from relative date string.
-// "X days ago" → X, "X weeks ago" → X*7, "X months ago" → X*30, "X years ago" → X*365.
-// Higher value = older. Falls back to last item (newest-first default sort).
+// Higher ageScore = older. Falls back to last item (newest-first default sort).
 function getOldestFromList(videoList) {
     if (!videoList.length) return null;
-    function ageScore(dateStr) {
-        if (!dateStr) return 0;
-        const s = dateStr.trim().toLowerCase();
-        // Handle both short ("13h","7d","2mo","5y") and long ("7 days ago") formats.
-        // Order matters: multi-char units (mo, sec, hr, wk, yr) before single letters.
-        const m = s.match(/(\d+)\s*(mo|sec|min|hr|wk|yr|s|m|h|d|w|y|second|minute|hour|day|week|month|year)/);
-        if (!m) return 0;
-        const n = parseInt(m[1]);
-        const u = m[2];
-        if (u === 'mo' || u === 'month') return n * 30;
-        if (u === 's' || u === 'sec' || u === 'second') return n / 86400;
-        if (u === 'min' || u === 'minute' || u === 'm') return n / 1440;
-        if (u === 'h' || u === 'hr' || u === 'hour') return n / 24;
-        if (u === 'd' || u === 'day') return n;
-        if (u === 'w' || u === 'wk' || u === 'week') return n * 7;
-        if (u === 'y' || u === 'yr' || u === 'year') return n * 365;
-        return 0;
-    }
     return [...videoList].sort((a, b) => ageScore(b.date) - ageScore(a.date))[0];
 }
 

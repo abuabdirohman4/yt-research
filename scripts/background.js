@@ -1,3 +1,14 @@
+function openResultsWindow() {
+    chrome.windows.create({
+        url: chrome.runtime.getURL('results/results.html'),
+        type: 'popup',
+        width: 860,
+        height: 580
+    }, (win) => {
+        if (win) chrome.storage.local.set({ resultsWindowId: win.id });
+    });
+}
+
 const setScrapingState = async (isScraping, status, extra) => {
     await chrome.storage.local.set({ isScraping, status });
     try {
@@ -63,6 +74,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             setScrapingState(true, 'Starting...');
             injectToTab(tabId, request);
+
+            // Auto-open live results window for research mode
+            if (request.mode === 'research') {
+                chrome.storage.local.get(['resultsWindowId'], (s) => {
+                    const existingId = s.resultsWindowId;
+                    if (existingId) {
+                        chrome.windows.get(existingId, (win) => {
+                            if (!chrome.runtime.lastError && win) {
+                                chrome.windows.update(existingId, { focused: true });
+                            } else {
+                                openResultsWindow();
+                            }
+                        });
+                    } else {
+                        openResultsWindow();
+                    }
+                });
+            }
+
             sendResponse({ success: true });
         });
         return true;
