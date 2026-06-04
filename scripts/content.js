@@ -547,21 +547,20 @@ async function extractChannelsFromSearch(limit, label = '?') {
     };
 
     let scrolls = 0;
-    let prevItemCount = 0;
+    let prevChannelCount = 0;
     let stalled = 0;
-    while (channels.length < limit && scrolls < 15) {
+    while (channels.length < limit && scrolls < 30) {
         if (window.ytResearchStopRequested) break;
         if (collect()) break;
         window.scrollTo(0, document.body.scrollHeight);
-        await sleep(1500);
+        await sleep(2500);
         scrolls++;
-        // Stop early only if YouTube has no more results to load (count stable twice)
-        const itemCount = document.querySelectorAll('ytd-video-renderer').length;
-        if (itemCount === prevItemCount) {
-            if (++stalled >= 2) break; // truly exhausted
+        // Stall = no new unique channels found after this scroll
+        if (channels.length === prevChannelCount) {
+            if (++stalled >= 3) break; // YouTube exhausted for this niche
         } else {
             stalled = 0;
-            prevItemCount = itemCount;
+            prevChannelCount = channels.length;
         }
     }
     collect();
