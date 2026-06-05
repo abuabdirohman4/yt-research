@@ -287,10 +287,10 @@ function nicheNumber(label) {
 }
 
 function generateNicheCSV(rows) {
-    const headers = ['No.', 'Niche', 'Channel URL', 'Avg Views (5 Latest)', 'Latest Upload Date', 'Most Popular Views', 'Oldest Upload Date', 'Oldest Upload Date (days)'];
+    const headers = ['No.', 'Niche', 'Channel URL', 'Subscribers', 'Avg Views (5 Latest)', 'Latest Upload Date', 'Most Popular Views', 'Oldest Upload Date', 'Oldest Upload Date (days)'];
     const csvRows = rows.map(v => [
         escape(nicheNumber(v.niche)), escape(v.niche), escape(v.channelUrl),
-        escape(parseNumStr(v.avgViews)), escape(v.latestDate),
+        escape(v.subscribers || ''), escape(parseNumStr(v.avgViews)), escape(v.latestDate),
         escape(parseNumStr(v.popularViews)), escape(v.oldestDate),
         escape(relativeToDays(v.oldestDate))
     ].join(','));

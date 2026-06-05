@@ -119,7 +119,7 @@ function render(state) {
                 headTr.className = 'niche-head' + (isUnder ? ' niche-head-under' : '');
                 const no = nicheNumber(niche);
                 const prefix = isUnder ? '⚠ ' : '';
-                headTr.innerHTML = `<td colspan="6">${prefix}${no ? no + ' · ' : ''}${niche} (${count}/${target})</td>`;
+                headTr.innerHTML = `<td colspan="7">${prefix}${no ? no + ' · ' : ''}${niche} (${count}/${target})</td>`;
                 tbody.appendChild(headTr);
                 prevNiche = niche;
             }
@@ -142,6 +142,7 @@ function render(state) {
                 <td title="${no}">${no}</td>
                 <td title="${niche}">${niche}</td>
                 <td>${linkHtml}</td>
+                <td>${row.subscribers || '—'}</td>
                 <td>${fmt(row.avgViews)}</td>
                 <td>${fmt(row.popularViews)}</td>
                 <td>${row.oldestDate || '—'}</td>

@@ -707,9 +707,13 @@ async function runNicheResearch() {
             const avgViews = viewNums.length ? Math.round(viewNums.reduce((a, b) => a + b, 0) / viewNums.length) : '';
             console.log('[YTR] latest5 views:', latest5.map(v => v.views), 'avg:', avgViews);
 
+            const subEl = document.querySelector('#subscriber-count');
+            const subscribers = subEl ? subEl.textContent.trim() : '';
+
             const row = {
                 niche,
                 channelUrl: ch.url + '/videos',
+                subscribers,
                 avgViews,
                 latestDate: latest5[0] ? latest5[0].date : '',
                 popularViews: '',
@@ -884,15 +888,20 @@ async function runDeepDive(deepdiveOptions) {
         }
         await sleep(1500);
 
-        // Infinite scroll: scroll until no new items
+        // Infinite scroll: scroll until no new items (stall 3x before stopping)
         let prevCount = 0;
         let scrollAttempts = 0;
+        let stalled = 0;
         const MAX_SCROLL = 100;
         while (scrollAttempts < MAX_SCROLL) {
             if (window.ytResearchStopRequested) break;
             const items = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer');
-            if (items.length === prevCount && scrollAttempts > 0) break;
-            prevCount = items.length;
+            if (items.length === prevCount && scrollAttempts > 0) {
+                if (++stalled >= 3) break; // truly exhausted
+            } else {
+                stalled = 0;
+                prevCount = items.length;
+            }
             window.scrollTo(0, document.body.scrollHeight);
             sendProgress(`Scrolling…`, `Loaded ${prevCount} videos`, Math.min(20 + scrollAttempts, 60));
             await sleep(1800);
