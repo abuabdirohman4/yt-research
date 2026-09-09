@@ -345,23 +345,58 @@ async function scrapeChannelInfoFallback(channelName, subscribers) {
 // ===================== TRANSCRIPT SCRAPER =====================
 
 async function scrapeTranscript() {
-    const btn = document.querySelector('button[aria-label="Show transcript"]');
+    // Halaman video sering masih memuat saat fungsi ini dipanggil, sehingga
+    // tombol "Show transcript" belum ada. Dulu langsung menyerah di sini —
+    // itu sebab sebagian video dilaporkan "TIDAK ADA TRANSCRIPT" padahal ada.
+    let btn = null;
+    for (let i = 0; i < 40; i++) {              // sampai ~20 detik
+        const btns = [...document.querySelectorAll('button[aria-label="Show transcript"]')];
+        btn = btns.find(b => b.offsetParent !== null) || btns[0];
+        if (btn) break;
+        await sleep(500);
+    }
     if (!btn) return '';
     btn.click();
-    try {
-        await waitForElement('yt-section-list-renderer[data-target-id="PAmodern_transcript_view"]', 8000);
-    } catch (e) {
-        return '';
+
+    // Dua layout hidup berdampingan:
+    //   A (lama) transcript-segment-view-model  di dalam yt-section-list-renderer
+    //   B (kini) ytd-transcript-segment-renderer di dalam ytd-transcript-renderer
+    // Jangan pakai atribut `visibility` panel sebagai penanda siap — panel bisa
+    // tetap bertanda HIDDEN padahal isinya sudah tampil di layar.
+    const SEL = 'transcript-segment-view-model, ytd-transcript-segment-renderer';
+    let segments = [];
+    for (let i = 0; i < 60; i++) {          // sampai ~30 detik
+        await sleep(500);
+        segments = document.querySelectorAll(SEL);
+        if (segments.length) break;
+        // Panel bisa terbuka dengan spinner dan belum berisi apa pun. Kalau
+        // tombolnya kembali ke keadaan tertutup (klik tak terdaftar), klik lagi.
+        if (i === 10 || i === 25) {
+            const again = [...document.querySelectorAll('button[aria-label="Show transcript"]')]
+                .find(b => b.offsetParent !== null);
+            if (again) again.click();
+        }
     }
-    await sleep(1000);
-    const segments = document.querySelectorAll(
-        'yt-section-list-renderer[data-target-id="PAmodern_transcript_view"] transcript-segment-view-model'
-    );
     if (!segments.length) return '';
+
+    // Baris panjang dimuat bertahap; tunggu jumlahnya berhenti bertambah.
+    let prev = 0;
+    for (let i = 0; i < 10 && segments.length !== prev; i++) {
+        prev = segments.length;
+        await sleep(600);
+        segments = document.querySelectorAll(SEL);
+    }
+
     const parts = [];
     for (const seg of segments) {
-        const ts = seg.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent?.trim() || '';
-        const text = seg.querySelector('span[role="text"]')?.textContent?.trim() || '';
+        const ts = (
+            seg.querySelector('.segment-timestamp') ||                    // layout B
+            seg.querySelector('.ytwTranscriptSegmentViewModelTimestamp')  // layout A
+        )?.textContent?.trim() || '';
+        const text = (
+            seg.querySelector('yt-formatted-string.segment-text') ||      // layout B
+            seg.querySelector('span[role="text"]')                        // layout A
+        )?.textContent?.trim() || '';
         if (ts && text) parts.push(`[${ts}] ${text}`);
         else if (text) parts.push(text);
     }
@@ -1073,9 +1108,171 @@ async function finishDeepDive(deepdiveOptions, state) {
 
 // ===================== MAIN ENTRY =====================
 
+// ===================== MODE: TRANSCRIPT ONLY =====================
+// Ambil transcript saja dari N video sebuah channel, urut popular/latest/oldest.
+// Jauh lebih ringan dari Deep Dive: tak buka deskripsi, likes, komentar, thumbnail.
+
+// Urutan HANYA lewat chip. Parameter ?sort=p / ?sort=da dibuang YouTube SPA
+// saat halaman dimuat (terbukti: URL kembali ke /videos, chip balik ke Latest),
+// jadi mengandalkannya membuat mode Popular/Oldest diam-diam jadi Latest.
+const TR_SORT_CHIP = { popular: 'Popular', oldest: 'Oldest', latest: 'Latest' };
+
+async function runTranscriptMode(cfg) {
+    if (window.ytResearchTranscriptRunning) return;
+    window.ytResearchTranscriptRunning = true;
+    try {
+        const base = normalizeChannelUrl(cfg.url) || cfg.url.replace(/\/videos\/?$/, '');
+        if (!base) {
+            console.error('[YTResearch] URL channel tidak valid');
+            chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+            return;
+        }
+        const sort = cfg.sort || 'latest';
+        const target = base + '/videos';
+        await chrome.storage.local.set({
+            transcriptConfig: cfg, transcriptPhase: 'list',
+            transcriptList: [], transcriptIndex: 0, transcriptData: [],
+            channelBase: base
+        });
+        sendProgress('Step 1', 'Membuka daftar video…', 5);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: target });
+    } finally {
+        window.ytResearchTranscriptRunning = false;
+    }
+}
+
+async function transcriptCollectList(state) {
+    const cfg = state.transcriptConfig || {};
+    const sort = cfg.sort || 'latest';
+    const want = parseInt(cfg.count, 10) || 10;
+
+    // Chip lebih andal daripada ?sort= — YouTube SPA sering membuang parameter URL.
+    const titlesNow = () => [...document.querySelectorAll('ytd-rich-item-renderer')]
+        .map(it => (it.querySelector('h3.ytLockupMetadataViewModelHeadingReset')?.getAttribute('title') || ''))
+        .join('|');
+
+    // Auto-continue berjalan segera setelah navigasi, saat YouTube baru merender
+    // beberapa video pertama. Mengklik chip di kondisi itu membuat pengurutan
+    // dan pembacaan daftar saling mendahului, sehingga hasilnya tetap urutan
+    // Latest. Tunggu chip ada DAN jumlah item berhenti bertambah dulu.
+    let seen = -1, steady = 0;
+    for (let i = 0; i < 40; i++) {
+        const chipReady = document.querySelector('button.ytChipShapeButtonReset[aria-label="Popular"]')
+            || document.querySelector('button.ytChipShapeButtonReset[role="combobox"]');
+        const n = document.querySelectorAll('ytd-rich-item-renderer').length;
+        if (chipReady && n > 0 && n === seen) {
+            if (++steady >= 2) break;      // stabil 2 pemeriksaan berturut-turut
+        } else {
+            steady = 0;
+        }
+        seen = n;
+        await sleep(500);
+    }
+
+    if (sort !== 'latest') {
+        const before = titlesNow();
+        await clickChipAndWait(TR_SORT_CHIP[sort]);
+        // Daftar diganti secara asinkron; tunggu sampai isinya benar-benar beda
+        // daripada menebak dengan jeda tetap.
+        for (let i = 0; i < 20; i++) {
+            await sleep(700);
+            if (titlesNow() && titlesNow() !== before) break;
+        }
+    } else {
+        await clickChipAndWait('Latest');
+        await sleep(1200);
+    }
+
+    // Gulir secukupnya saja: berhenti begitu jumlah video sudah cukup.
+    let prev = 0, stalled = 0;
+    for (let i = 0; i < 40; i++) {
+        const items = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer');
+        if (items.length >= want) break;
+        if (items.length === prev) { if (++stalled >= 3) break; }
+        else { stalled = 0; prev = items.length; }
+        window.scrollTo(0, document.body.scrollHeight);
+        sendProgress('Memuat daftar', `${items.length} video…`, Math.min(10 + i * 2, 30));
+        await sleep(1500);
+    }
+
+    const all = parseVideoItems(0);
+    const list = all.slice(0, want);
+    if (list.length === 0) {
+        chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+        return;
+    }
+    // Nama channel dipakai untuk menamai file hasil, mengikuti pola yt-transcript
+    // (yt-toolkit): "{NamaChannel}_all_transcripts.txt".
+    const channelName = (
+        document.querySelector('yt-formatted-string.ytd-channel-name#text')?.textContent
+        || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+        || document.querySelector('h1 .yt-core-attributed-string')?.textContent
+        || ''
+    ).trim();
+
+    await chrome.storage.local.set({
+        transcriptList: list, transcriptIndex: 0, transcriptPhase: 'video',
+        transcriptChannel: channelName
+    });
+    sendProgress('Step 2', `Video 1/${list.length}: memuat…`, 35);
+    chrome.runtime.sendMessage({ action: 'navigateTo', url: list[0].videoUrl });
+}
+
+async function transcriptScrapeOne(state) {
+    const cfg = state.transcriptConfig || {};
+    const list = state.transcriptList || [];
+    const idx = state.transcriptIndex || 0;
+    const data = state.transcriptData || [];
+    if (idx >= list.length) return;
+
+    const v = list[idx];
+    const pct = 35 + Math.round((idx / list.length) * 60);
+    sendProgress(`Video ${idx + 1}/${list.length}`, (v.title || '').slice(0, 48), pct);
+
+    // Tunggu halaman video benar-benar siap (judul sudah terisi), bukan jeda
+    // tetap — video yang lambat memuat dulu terlewat begitu saja.
+    let exactTitle = '';
+    for (let i = 0; i < 30; i++) {              // sampai ~15 detik
+        await sleep(500);
+        exactTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')
+            ?.textContent?.trim() || '';
+        if (exactTitle) break;
+    }
+    if (!exactTitle) exactTitle = v.title || '';
+    let text = '';
+    try {
+        text = await scrapeTranscript();
+    } catch (e) {
+        console.warn('[YTResearch] transcript gagal', e);
+    }
+    if (text && cfg.timestamps === false) {
+        text = text.replace(/\[\d+:\d+(?::\d+)?\]\s*/g, '');
+    }
+    data.push({
+        title: exactTitle,
+        videoUrl: v.videoUrl,
+        transcript: text || '[TIDAK ADA TRANSCRIPT]'
+    });
+
+    const next = idx + 1;
+    if (next >= list.length) {
+        await chrome.storage.local.set({ transcriptData: data, transcriptPhase: 'done' });
+        chrome.runtime.sendMessage({ action: 'transcriptJobDone' });
+        return;
+    }
+    await chrome.storage.local.set({ transcriptData: data, transcriptIndex: next });
+    chrome.runtime.sendMessage({ action: 'navigateTo', url: list[next].videoUrl });
+}
+
 async function runScraping(mode, deepdiveOptions, researchConfig) {
     const pageType = getPageType();
     console.log(`[YTResearch] runScraping mode=${mode} page=${pageType}`);
+
+    if (mode === 'transcript') {
+        const cfg = (await chrome.storage.local.get(['transcriptConfig'])).transcriptConfig || {};
+        await runTranscriptMode(cfg);
+        return;
+    }
 
     if (mode === 'research') {
         const cfg = researchConfig || (await chrome.storage.local.get(['researchConfig'])).researchConfig || {};
@@ -1157,7 +1354,7 @@ if (!window.ytResearchLoaded) {
     });
 
     // Auto-continue after navigation (same pattern as yt-analytic-scrape)
-    chrome.storage.local.get(['isScraping', 'mode', 'scrapePhase', 'researchPhase', 'deepdiveOptions', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'channelBase'], (state) => {
+    chrome.storage.local.get(['isScraping', 'mode', 'scrapePhase', 'researchPhase', 'deepdiveOptions', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'channelBase', 'transcriptConfig', 'transcriptPhase', 'transcriptList', 'transcriptIndex', 'transcriptData'], (state) => {
         if (isMessageDriven) { console.log('[YTResearch] Message-driven flow active, skipping auto-continue'); return; }
         const pageType = getPageType();
         if (!state.isScraping) return;
@@ -1166,6 +1363,16 @@ if (!window.ytResearchLoaded) {
         const mode = state.mode;
 
         console.log(`[YTResearch] Auto-continue: mode=${mode} phase=${phase} researchPhase=${state.researchPhase} page=${pageType}`);
+
+        if (mode === 'transcript') {
+            const tp = state.transcriptPhase;
+            if (tp === 'list' && pageType && pageType.startsWith('channel-videos')) {
+                transcriptCollectList(state);
+            } else if (tp === 'video' && pageType === 'watch') {
+                transcriptScrapeOne(state);
+            }
+            return;
+        }
 
         if (mode === 'research') {
             const rp = state.researchPhase;

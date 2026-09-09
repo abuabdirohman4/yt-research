@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Research Niche elements
     const nicheWrap = document.getElementById('nicheWrap');
+    const transcriptWrap = document.getElementById('transcriptWrap');
     const nicheChannelsPerNiche = document.getElementById('nicheChannelsPerNiche');
     const nicheSuffix = document.getElementById('nicheSuffix');
     const nicheDateFilter = document.getElementById('nicheDateFilter');
@@ -93,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const scraping = startButton.disabled;
         settingsWrap.style.display = (activeMode === 'deepdive' && !scraping) ? '' : 'none';
         nicheWrap.style.display = (activeMode === 'research' && !scraping) ? '' : 'none';
+        transcriptWrap.style.display = (activeMode === 'transcript' && !scraping) ? '' : 'none';
         // Results only for research
         if (activeMode !== 'research') {
             resultsWrap.style.display = 'none';
@@ -410,6 +412,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Buttons ──
     startButton.addEventListener('click', () => {
+        if (activeMode === 'transcript') {
+            const url = document.getElementById('trUrl').value.trim();
+            if (!url) {
+                showStatusCard('No URL', 'Masukkan URL channel dulu', 'error', '#f59e0b');
+                return;
+            }
+            const transcriptConfig = {
+                url,
+                sort: document.getElementById('trSort').value,
+                count: parseInt(document.getElementById('trCount').value, 10) || 10,
+                timestamps: document.getElementById('trTimestamps').checked
+            };
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            resultsWrap.style.display = 'none';
+            showProgressCard('Starting…', '', 0);
+            chrome.runtime.sendMessage({ action: 'startScraping', mode: 'transcript', transcriptConfig }, () => {
+                if (chrome.runtime.lastError) updateUI(false, 'Error: Failed to start');
+            });
+            return;
+        }
+
         if (activeMode === 'research') {
             let researchConfig;
             if (getResearchMode() === 'urls') {

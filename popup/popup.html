@@ -27,6 +27,7 @@
     <div class="mode-tabs">
         <button class="mode-tab active" data-mode="deepdive" id="tabDeepdive">Reseach Competitor</button>
         <button class="mode-tab" data-mode="research" id="tabResearch">Research Niche</button>
+        <button class="mode-tab" data-mode="transcript" id="tabTranscript">Transcript</button>
     </div>
 
     <!-- Status Card (Ready / Done / Error) -->
@@ -186,6 +187,38 @@
             <div class="filter-hint" style="padding:2px 0 0 50px" id="manualUrlCount">0 URLs</div>
         </div>
     </div>
+
+    <!-- ===== MODE: TRANSCRIPT ONLY ===== -->
+    <div class="settings-wrap" id="transcriptWrap" style="display:none">
+        <div class="settings-row">
+            <span class="settings-title">Channel URL</span>
+        </div>
+        <div class="filter-sub">
+            <input type="text" id="trUrl" class="filter-input" style="width:100%"
+                   placeholder="https://youtube.com/@channel">
+        </div>
+        <div class="settings-row">
+            <span class="settings-title">Pilih video</span>
+        </div>
+        <div class="filter-sub">
+            <div class="filter-date-row">
+                <select id="trSort" class="filter-input" style="width:auto">
+                    <option value="popular">Popular</option>
+                    <option value="latest" selected>Latest</option>
+                    <option value="oldest">Oldest</option>
+                </select>
+                <input type="number" id="trCount" min="1" max="200" value="10"
+                       class="filter-input" style="width:80px">
+                <span class="filter-hint">video</span>
+            </div>
+        </div>
+        <div class="filter-sub">
+            <label class="radio-label">
+                <input type="checkbox" id="trTimestamps" checked> Sertakan timestamp
+            </label>
+        </div>
+    </div>
+
 
     <!-- Buttons -->
     <div class="btn-group">

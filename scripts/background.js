@@ -55,6 +55,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 deepdiveOptions: request.deepdiveOptions || {},
                 videoFilter: request.videoFilter || { mode: 'all' },
                 researchConfig: request.researchConfig || null,
+                transcriptConfig: request.transcriptConfig || null,
                 researchResult: null,
                 deepdiveData: [],
                 lastProgress: null,
@@ -158,6 +159,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    else if (request.action === 'transcriptJobDone') {
+        chrome.storage.local.get(['transcriptData', 'transcriptConfig', 'transcriptChannel'], (r) => {
+            chrome.storage.local.set({ lastProgress: null });
+            const data = r.transcriptData || [];
+            const ok = data.filter(d => d.transcript && !d.transcript.startsWith('[TIDAK ADA')).length;
+
+            if (data.length > 0) {
+                const txt = generateTranscriptTxt(data, r.transcriptConfig || {});
+                const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(txt);
+                // Pola nama mengikuti yt-transcript (yt-toolkit): buang karakter
+                // non-alfanumerik, spasi jadi underscore.
+                const safe = (r.transcriptChannel || 'channel')
+                    .toLowerCase()
+                    .replace(/[^\w\s-]/g, '')
+                    .trim()
+                    .replace(/[\s-]+/g, '_')     // spasi & tanda hubung -> underscore
+                    .replace(/_+/g, '_')          // rapatkan underscore beruntun
+                    .replace(/^_|_$/g, '') || 'channel';
+                chrome.downloads.download({
+                    url: dataUrl,
+                    filename: `${safe}_all_transcripts.txt`,
+                    saveAs: false
+                });
+                setScrapingState(false, `Done! ${ok}/${data.length} transcript.`);
+            } else {
+                setScrapingState(false, 'Done! (tidak ada transcript)');
+            }
+            chrome.storage.local.get(['scrapingTabId'], (t) => {
+                if (t.scrapingTabId) chrome.tabs.update(t.scrapingTabId, { url: 'https://www.youtube.com/' });
+            });
+        });
+        return true;
+    }
+
     else if (request.action === 'scrapingJobDone') {
         chrome.storage.local.get(['mode', 'researchResult', 'nicheResults', 'nicheQueue', 'deepdiveChannelData', 'deepdiveVideoData', 'deepdiveOptions'], (r) => {
             chrome.storage.local.set({ lastProgress: null });
@@ -228,6 +263,22 @@ function escape(val) {
         return '"' + s.replace(/"/g, '""') + '"';
     }
     return s;
+}
+
+// Format sama dengan yt-transcript (yt-toolkit) supaya file hasilnya bisa
+// langsung dipakai yt-slides tanpa konversi.
+function generateTranscriptTxt(data, cfg) {
+    const bar = '='.repeat(52);
+    const dash = '-'.repeat(52);
+    const sortLabel = { popular: 'POPULAR', latest: 'LATEST', oldest: 'OLDEST' }[cfg.sort] || 'LATEST';
+    const parts = [
+        `${bar}\nCHANNEL TRANSCRIPTS (${sortLabel})\n` +
+        `Total Videos: ${data.length} | Export Date: ${new Date().toLocaleDateString()}\n${bar}\n`
+    ];
+    data.forEach((d, i) => {
+        parts.push(`\n${dash}\nVIDEO ${i + 1}: ${d.title}\nURL: ${d.videoUrl}\n${dash}\n\n${d.transcript}\n`);
+    });
+    return parts.join('\n');
 }
 
 function generateChannelInfoCSV(info) {

@@ -89,3 +89,4 @@ Separate repos, no shared dependencies — each one stands alone:
 - **[yt-research](https://github.com/abuabdirohman4/yt-research)** (this repo) — competitor research: find channels by niche, deep-dive **other people's** channels. Chrome extension.
 - **[yt-studio-scrape](https://github.com/abuabdirohman4/yt-studio-scrape)** — analytics from **your own** YouTube Studio. Chrome extension.
 - **[yt-toolkit](https://github.com/abuabdirohman4/yt-toolkit)** — transcripts, channel data to CSV, slide extraction from video files. Python CLI.
+- **gemini-batch-image** (`../gemini-batch-image`) — batch image generation on gemini.google.com from a JSON job list with reference characters. Chrome extension.
