@@ -1141,6 +1141,105 @@ async function runTranscriptMode(cfg) {
     }
 }
 
+/**
+ * Urutkan daftar video channel lalu kumpulkan N teratas.
+ * Dipakai bersama mode Transcript dan Download — logikanya sudah terbukti:
+ * chip lebih andal daripada ?sort= (YouTube SPA membuang parameter itu), dan
+ * chip baru boleh diklik setelah jumlah item berhenti bertambah.
+ */
+async function collectChannelVideos(sort, want) {
+    const titlesNow = () => [...document.querySelectorAll('ytd-rich-item-renderer')]
+        .map(it => (it.querySelector('h3.ytLockupMetadataViewModelHeadingReset')?.getAttribute('title') || ''))
+        .join('|');
+
+    // Auto-continue berjalan segera setelah navigasi, saat YouTube baru merender
+    // beberapa video pertama. Mengklik chip di kondisi itu membuat pengurutan dan
+    // pembacaan daftar saling mendahului, hasilnya tetap urutan Latest.
+    let seen = -1, steady = 0;
+    for (let i = 0; i < 40; i++) {
+        const chipReady = document.querySelector('button.ytChipShapeButtonReset[aria-label="Popular"]')
+            || document.querySelector('button.ytChipShapeButtonReset[role="combobox"]');
+        const n = document.querySelectorAll('ytd-rich-item-renderer').length;
+        if (chipReady && n > 0 && n === seen) {
+            if (++steady >= 2) break;
+        } else {
+            steady = 0;
+        }
+        seen = n;
+        await sleep(500);
+    }
+
+    if (sort !== 'latest') {
+        const before = titlesNow();
+        await clickChipAndWait(TR_SORT_CHIP[sort] || 'Latest');
+        for (let i = 0; i < 20; i++) {
+            await sleep(700);
+            if (titlesNow() && titlesNow() !== before) break;
+        }
+    } else {
+        await clickChipAndWait('Latest');
+        await sleep(1200);
+    }
+
+    // Gulir secukupnya saja: berhenti begitu jumlah video sudah cukup.
+    let prev = 0, stalled = 0;
+    for (let i = 0; i < 40; i++) {
+        const items = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer');
+        if (items.length >= want) break;
+        if (items.length === prev) { if (++stalled >= 3) break; }
+        else { stalled = 0; prev = items.length; }
+        window.scrollTo(0, document.body.scrollHeight);
+        sendProgress('Memuat daftar', `${items.length} video…`, Math.min(10 + i * 2, 30));
+        await sleep(1500);
+    }
+
+    return parseVideoItems(0).slice(0, want);
+}
+
+// ===================== MODE: DOWNLOAD VIDEO =====================
+// Hanya mengumpulkan daftar video di YouTube. Pengunduhan lewat y2mate
+// diorkestrasi background.js, karena prosesnya berpindah halaman berkali-kali
+// dan itu menghapus state content script.
+
+async function runDownloadMode(cfg) {
+    if (window.ytResearchDownloadRunning) return;
+    window.ytResearchDownloadRunning = true;
+    try {
+        const base = normalizeChannelUrl(cfg.url) || cfg.url.replace(/\/videos\/?$/, '');
+        if (!base) {
+            chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+            return;
+        }
+        await chrome.storage.local.set({
+            downloadConfig: cfg, downloadPhase: 'list', channelBase: base
+        });
+        sendProgress('Step 1', 'Membuka daftar video…', 5);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: base + '/videos' });
+    } finally {
+        window.ytResearchDownloadRunning = false;
+    }
+}
+
+async function downloadCollectList(state) {
+    const cfg = state.downloadConfig || {};
+    const want = parseInt(cfg.count, 10) || 5;
+
+    // Urutan & pengumpulan sama persis dengan mode transcript — sudah terbukti.
+    const list = await collectChannelVideos(cfg.sort || 'latest', want);
+    if (!list || !list.length) {
+        chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+        return;
+    }
+
+    await chrome.storage.local.set({ downloadPhase: 'running' });
+    sendProgress('Step 2', `${list.length} video — mulai unduh…`, 15);
+    chrome.runtime.sendMessage({
+        action: 'y2RunList',
+        list: list.map(v => ({ videoUrl: v.videoUrl, title: v.title })),
+        config: cfg
+    });
+}
+
 async function transcriptCollectList(state) {
     const cfg = state.transcriptConfig || {};
     const sort = cfg.sort || 'latest';
@@ -1274,6 +1373,12 @@ async function runScraping(mode, deepdiveOptions, researchConfig) {
         return;
     }
 
+    if (mode === 'download') {
+        const cfg = (await chrome.storage.local.get(['downloadConfig'])).downloadConfig || {};
+        await runDownloadMode(cfg);
+        return;
+    }
+
     if (mode === 'research') {
         const cfg = researchConfig || (await chrome.storage.local.get(['researchConfig'])).researchConfig || {};
 
@@ -1354,7 +1459,7 @@ if (!window.ytResearchLoaded) {
     });
 
     // Auto-continue after navigation (same pattern as yt-analytic-scrape)
-    chrome.storage.local.get(['isScraping', 'mode', 'scrapePhase', 'researchPhase', 'deepdiveOptions', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'channelBase', 'transcriptConfig', 'transcriptPhase', 'transcriptList', 'transcriptIndex', 'transcriptData'], (state) => {
+    chrome.storage.local.get(['isScraping', 'mode', 'scrapePhase', 'researchPhase', 'deepdiveOptions', 'deepdiveChannelInfo', 'deepdiveVideoList', 'deepdiveVideoIndex', 'channelBase', 'transcriptConfig', 'transcriptPhase', 'transcriptList', 'transcriptIndex', 'transcriptData', 'downloadConfig', 'downloadPhase'], (state) => {
         if (isMessageDriven) { console.log('[YTResearch] Message-driven flow active, skipping auto-continue'); return; }
         const pageType = getPageType();
         if (!state.isScraping) return;
@@ -1363,6 +1468,16 @@ if (!window.ytResearchLoaded) {
         const mode = state.mode;
 
         console.log(`[YTResearch] Auto-continue: mode=${mode} phase=${phase} researchPhase=${state.researchPhase} page=${pageType}`);
+
+        if (mode === 'download') {
+            // Hanya satu fase di sisi YouTube: kumpulkan daftar. Sisanya
+            // (buka y2mate, klik, unduh) dikerjakan background.js.
+            if (state.downloadPhase === 'list'
+                && pageType && pageType.startsWith('channel-videos')) {
+                downloadCollectList(state);
+            }
+            return;
+        }
 
         if (mode === 'transcript') {
             const tp = state.transcriptPhase;

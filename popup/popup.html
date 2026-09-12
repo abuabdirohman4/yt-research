@@ -28,6 +28,7 @@
         <button class="mode-tab active" data-mode="deepdive" id="tabDeepdive">Reseach Competitor</button>
         <button class="mode-tab" data-mode="research" id="tabResearch">Research Niche</button>
         <button class="mode-tab" data-mode="transcript" id="tabTranscript">Transcript</button>
+        <button class="mode-tab" data-mode="download" id="tabDownload">Download</button>
     </div>
 
     <!-- Status Card (Ready / Done / Error) -->
@@ -218,6 +219,53 @@
             </label>
         </div>
     </div>
+
+    <!-- ===== MODE: DOWNLOAD VIDEO (y2mate) ===== -->
+    <div class="settings-wrap" id="downloadWrap" style="display:none">
+        <div class="settings-row">
+            <span class="settings-title">Channel URL</span>
+        </div>
+        <div class="filter-sub">
+            <input type="text" id="dlUrl" class="filter-input" style="width:100%"
+                   placeholder="https://youtube.com/@channel">
+        </div>
+        <div class="settings-row">
+            <span class="settings-title">Pilih video</span>
+        </div>
+        <div class="filter-sub">
+            <div class="filter-date-row">
+                <select id="dlSort" class="filter-input" style="width:auto">
+                    <option value="popular">Popular</option>
+                    <option value="latest" selected>Latest</option>
+                    <option value="oldest">Oldest</option>
+                </select>
+                <input type="number" id="dlCount" min="1" max="100" value="5"
+                       class="filter-input" style="width:70px">
+                <span class="filter-hint">video</span>
+            </div>
+        </div>
+        <div class="settings-row">
+            <span class="settings-title">Format</span>
+        </div>
+        <div class="filter-sub">
+            <div class="filter-date-row">
+                <select id="dlKind" class="filter-input" style="width:auto">
+                    <option value="video" selected>Video (MP4)</option>
+                    <option value="audio">Audio (MP3)</option>
+                </select>
+                <select id="dlQuality" class="filter-input" style="width:auto">
+                    <option value="1080p">1080p</option>
+                    <option value="720p" selected>720p</option>
+                    <option value="480p">480p</option>
+                    <option value="360p">360p</option>
+                </select>
+            </div>
+            <div class="filter-hint" style="margin-top:6px">
+                Audio: kualitas diabaikan, dipakai bitrate tertinggi.
+            </div>
+        </div>
+    </div>
+
 
 
     <!-- Buttons -->

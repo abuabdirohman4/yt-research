@@ -18,6 +18,66 @@ const setScrapingState = async (isScraping, status, extra) => {
     }
 };
 
+const bgSleep = ms => new Promise(r => setTimeout(r, ms));
+
+function sendProgressBg(phase, detail, percent) {
+    const data = { phase, detail, percent };
+    chrome.storage.local.set({ lastProgress: data });
+    chrome.runtime.sendMessage({ action: 'updateProgress', ...data }).catch(() => {});
+}
+
+/** Kirim pesan ke satu tab, kembalikan balasan (atau null kalau gagal). */
+function askTab(tabId, msg, frameId) {
+    return new Promise(resolve => {
+        const opts = frameId === undefined ? {} : { frameId };
+        chrome.tabs.sendMessage(tabId, msg, opts, (resp) => {
+            if (chrome.runtime.lastError) return resolve(null);
+            resolve(resp);
+        });
+    });
+}
+
+/** Cari frameId milik iframe widget y2mate di tab ini. */
+async function y2FindFrame(tabId) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+    if (!frames) return null;
+    const f = frames.find(fr => /frame\.y2meta-uk\.com/.test(fr.url || ''));
+    return f ? f.frameId : null;
+}
+
+/** Proses satu video sampai tombol Download diklik. */
+async function y2OneVideo(tabId, videoUrl, cfg) {
+    // 1. buka halaman y2mate
+    await chrome.tabs.update(tabId, { url: 'https://www.y2mate.in.net/convert/' });
+    await bgSleep(3000);
+
+    // 2. tempel URL + klik Start (di dokumen utama, bukan iframe)
+    let submitted = null;
+    for (let i = 0; i < 5 && !(submitted && submitted.ok); i++) {
+        submitted = await askTab(tabId, { action: 'y2submit', videoUrl }, 0);
+        if (!submitted) await bgSleep(1500);
+    }
+    if (!submitted || !submitted.ok) return { ok: false, step: 'submit' };
+
+    // 3. tunggu iframe widget muncul (halaman bernavigasi setelah Start)
+    let frameId = null;
+    for (let i = 0; i < 25 && frameId === null; i++) {
+        await bgSleep(800);
+        frameId = await y2FindFrame(tabId);
+    }
+    if (frameId === null) return { ok: false, step: 'frame' };
+
+    // 4. di dalam iframe: pilih jenis + kualitas, lalu klik Download
+    await bgSleep(1200);
+    const res = await askTab(tabId, {
+        action: 'y2download',
+        kind: cfg.kind || 'video',
+        quality: cfg.quality || '720p'
+    }, frameId);
+
+    return res || { ok: false, step: 'iframe-nomsg' };
+}
+
 function injectToTab(tabId, command) {
     // Try sending to existing content script first
     chrome.tabs.sendMessage(tabId, command, (response) => {
@@ -56,6 +116,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 videoFilter: request.videoFilter || { mode: 'all' },
                 researchConfig: request.researchConfig || null,
                 transcriptConfig: request.transcriptConfig || null,
+                downloadConfig: request.downloadConfig || null,
                 researchResult: null,
                 deepdiveData: [],
                 lastProgress: null,
@@ -155,6 +216,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             };
             chrome.storage.local.set({ lastProgress: progressData });
             chrome.runtime.sendMessage({ action: 'updateProgress', ...progressData }).catch(() => {});
+        });
+        return true;
+    }
+
+    // ===== MODE DOWNLOAD (y2mate) =====
+    // Satu video = satu siklus: buka y2mate -> tempel URL -> tunggu iframe ->
+    // pilih jenis+kualitas -> klik Download. Diorkestrasi di sini karena
+    // butuh berpindah halaman, yang menghapus state content script.
+    else if (request.action === 'y2RunList') {
+        chrome.storage.local.get(['scrapingTabId'], async (r) => {
+            const tabId = r.scrapingTabId;
+            const list = request.list || [];
+            const cfg = request.config || {};
+            let ok = 0, gagal = 0;
+
+            for (let i = 0; i < list.length; i++) {
+                const v = list[i];
+                const label = (v.title || v.videoUrl || '').slice(0, 44);
+                sendProgressBg(`Video ${i + 1}/${list.length}`, label,
+                    Math.round((i / list.length) * 100));
+
+                const res = await y2OneVideo(tabId, v.videoUrl, cfg).catch(e => ({
+                    ok: false, step: 'exception', error: String(e).slice(0, 80)
+                }));
+                if (res && res.ok) ok++; else {
+                    gagal++;
+                    console.warn('[Y2] gagal', label, res);
+                }
+                // Jeda antar video: unduhan sebelumnya masih menulis ke disk,
+                // dan y2mate membatasi permintaan beruntun.
+                if (i < list.length - 1) await bgSleep(cfg.delay || 3000);
+            }
+
+            setScrapingState(false, `Selesai — ${ok} terunduh, ${gagal} gagal.`);
+            chrome.storage.local.set({ lastProgress: null });
+            if (tabId) chrome.tabs.update(tabId, { url: 'https://www.youtube.com/' });
         });
         return true;
     }

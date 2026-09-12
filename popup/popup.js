@@ -34,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Research Niche elements
     const nicheWrap = document.getElementById('nicheWrap');
     const transcriptWrap = document.getElementById('transcriptWrap');
+    const downloadWrap = document.getElementById('downloadWrap');
     const nicheChannelsPerNiche = document.getElementById('nicheChannelsPerNiche');
     const nicheSuffix = document.getElementById('nicheSuffix');
     const nicheDateFilter = document.getElementById('nicheDateFilter');
@@ -95,6 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsWrap.style.display = (activeMode === 'deepdive' && !scraping) ? '' : 'none';
         nicheWrap.style.display = (activeMode === 'research' && !scraping) ? '' : 'none';
         transcriptWrap.style.display = (activeMode === 'transcript' && !scraping) ? '' : 'none';
+        downloadWrap.style.display = (activeMode === 'download' && !scraping) ? '' : 'none';
         // Results only for research
         if (activeMode !== 'research') {
             resultsWrap.style.display = 'none';
@@ -412,6 +414,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Buttons ──
     startButton.addEventListener('click', () => {
+        if (activeMode === 'download') {
+            const url = document.getElementById('dlUrl').value.trim();
+            if (!url) {
+                showStatusCard('No URL', 'Masukkan URL channel dulu', 'error', '#f59e0b');
+                return;
+            }
+            const downloadConfig = {
+                url,
+                sort: document.getElementById('dlSort').value,
+                count: parseInt(document.getElementById('dlCount').value, 10) || 5,
+                kind: document.getElementById('dlKind').value,
+                quality: document.getElementById('dlQuality').value
+            };
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            resultsWrap.style.display = 'none';
+            showProgressCard('Starting…', '', 0);
+            chrome.runtime.sendMessage({ action: 'startScraping', mode: 'download', downloadConfig }, () => {
+                if (chrome.runtime.lastError) updateUI(false, 'Error: Failed to start');
+            });
+            return;
+        }
+
         if (activeMode === 'transcript') {
             const url = document.getElementById('trUrl').value.trim();
             if (!url) {

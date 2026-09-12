@@ -2,13 +2,30 @@
   "manifest_version": 3,
   "name": "YT Research",
   "version": "1.0.0",
-  "description": "Research YouTube channels — quick overview or full competitor deep dive.",
-  "permissions": ["storage", "activeTab", "scripting", "downloads", "windows"],
-  "host_permissions": ["*://www.youtube.com/*"],
+  "description": "Research YouTube channels \u2014 quick overview or full competitor deep dive.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "downloads",
+    "windows",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "*://www.youtube.com/*",
+    "*://*.y2mate.in.net/*",
+    "*://frame.y2meta-uk.com/*"
+  ],
   "web_accessible_resources": [
     {
-      "resources": ["results/results.html", "results/results.js", "results/results.css"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "results/results.html",
+        "results/results.js",
+        "results/results.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "action": {
@@ -29,8 +46,23 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/*"],
-      "js": ["scripts/content.js"]
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "scripts/content.js"
+      ]
+    },
+    {
+      "matches": [
+        "*://*.y2mate.in.net/*",
+        "*://frame.y2meta-uk.com/*"
+      ],
+      "js": [
+        "scripts/y2mate.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
     }
   ]
 }
