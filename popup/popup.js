@@ -97,6 +97,12 @@ document.addEventListener('DOMContentLoaded', () => {
         nicheWrap.style.display = (activeMode === 'research' && !scraping) ? '' : 'none';
         transcriptWrap.style.display = (activeMode === 'transcript' && !scraping) ? '' : 'none';
         downloadWrap.style.display = (activeMode === 'download' && !scraping) ? '' : 'none';
+        const lbl = document.getElementById('startLabel');
+        if (lbl) {
+            lbl.textContent = activeMode === 'download' ? 'Start Download'
+                : activeMode === 'transcript' ? 'Start Transcript'
+                : 'Start research';
+        }
         // Results only for research
         if (activeMode !== 'research') {
             resultsWrap.style.display = 'none';
@@ -413,14 +419,119 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Buttons ──
+    /**
+     * Terima ID telanjang, URL penuh, dan youtu.be — dipisah baris atau koma.
+     * Urutan dipertahankan, duplikat dibuang.
+     */
+    function parseVideoIds(raw) {
+        const out = [], seen = new Set();
+        for (const chunk of (raw || '').split(/[\n,]+/)) {
+            const t = chunk.trim();
+            if (!t) continue;
+            let id = null;
+            const m = t.match(/(?:v=|youtu\.be\/|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+            if (m) id = m[1];
+            else if (/^[A-Za-z0-9_-]{11}$/.test(t)) id = t;
+            if (id && !seen.has(id)) { seen.add(id); out.push(id); }
+        }
+        return out;
+    }
+
+    // Panel log: dibaca dari storage, jadi tetap ada walau service worker
+    // sudah mati dan popup ditutup-buka.
+    const dlShowLog = document.getElementById('dlShowLog');
+    const dlLog = document.getElementById('dlLog');
+    if (dlShowLog && dlLog) {
+        dlShowLog.addEventListener('click', () => {
+            const buka = dlLog.style.display === 'none';
+            dlLog.style.display = buka ? '' : 'none';
+            dlShowLog.textContent = buka ? 'Sembunyikan log' : 'Lihat log terakhir';
+            if (!buka) return;
+            chrome.storage.local.get('y2RunLog', (r) => {
+                const baris = r.y2RunLog || [];
+                dlLog.textContent = baris.length ? baris.join('\n') : '(belum ada log)';
+                dlLog.scrollTop = dlLog.scrollHeight;
+            });
+        });
+    }
+
+    const dlCopyLog = document.getElementById('dlCopyLog');
+    if (dlCopyLog) {
+        dlCopyLog.addEventListener('click', () => {
+            chrome.storage.local.get('y2RunLog', async (r) => {
+                const teks = (r.y2RunLog || []).join('\n');
+                if (!teks) { dlCopyLog.textContent = 'Kosong'; }
+                else {
+                    try {
+                        await navigator.clipboard.writeText(teks);
+                        dlCopyLog.textContent = 'Tersalin';
+                    } catch (e) {
+                        dlCopyLog.textContent = 'Gagal';
+                    }
+                }
+                setTimeout(() => { dlCopyLog.textContent = 'Salin'; }, 1500);
+            });
+        });
+    }
+
+    // Blok channel vs daftar ID saling menggantikan
+    function applyDlSource(v) {
+        const ids = v === 'ids';
+        document.getElementById('dlChannelBlock').style.display = ids ? 'none' : '';
+        document.getElementById('dlIdsBlock').style.display = ids ? '' : 'none';
+    }
+    document.querySelectorAll('input[name="dlSource"]').forEach(r => {
+        r.addEventListener('change', () => {
+            if (!r.checked) return;
+            applyDlSource(r.value);
+            chrome.storage.local.set({ dlSource: r.value });
+        });
+    });
+
+    // Popup Chrome dibuang dari memori tiap ditutup, jadi isian harus
+    // disimpan sendiri — kalau tidak, textarea selalu kosong saat dibuka lagi.
+    [['dlIds', 'dlIds'], ['dlUrl', 'dlUrl'], ['dlCount', 'dlCount']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', () => chrome.storage.local.set({ [key]: el.value }));
+    });
+    [['dlSort', 'dlSort'], ['dlKind', 'dlKind'], ['dlQuality', 'dlQuality']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', () => chrome.storage.local.set({ [key]: el.value }));
+    });
+
     startButton.addEventListener('click', () => {
         if (activeMode === 'download') {
+            const source = (document.querySelector('input[name="dlSource"]:checked') || {}).value || 'channel';
+
+            if (source === 'ids') {
+                const ids = parseVideoIds(document.getElementById('dlIds').value);
+                if (!ids.length) {
+                    showStatusCard('Tidak ada ID', 'Tempel minimal satu video ID atau URL', 'error', '#f59e0b');
+                    return;
+                }
+                const downloadConfig = {
+                    source: 'ids',
+                    ids,
+                    kind: document.getElementById('dlKind').value,
+                    quality: document.getElementById('dlQuality').value
+                };
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                resultsWrap.style.display = 'none';
+                showProgressCard('Starting…', `${ids.length} video`, 0);
+                chrome.runtime.sendMessage({ action: 'startScraping', mode: 'download', downloadConfig }, () => {
+                    if (chrome.runtime.lastError) updateUI(false, 'Error: Failed to start');
+                });
+                return;
+            }
+
             const url = document.getElementById('dlUrl').value.trim();
             if (!url) {
                 showStatusCard('No URL', 'Masukkan URL channel dulu', 'error', '#f59e0b');
                 return;
             }
             const downloadConfig = {
+                source: 'channel',
                 url,
                 sort: document.getElementById('dlSort').value,
                 count: parseInt(document.getElementById('dlCount').value, 10) || 5,
@@ -550,7 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Initial load ──
-    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter', 'researchSourceMode', 'manualUrls'], (r) => {
+    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter', 'researchSourceMode', 'manualUrls', 'dlSource', 'dlIds', 'dlUrl', 'dlCount', 'dlSort', 'dlKind', 'dlQuality'], (r) => {
         activeMode = r.activeMode || 'deepdive';
 
         applyTheme(r.theme || 'dark');
@@ -567,6 +678,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Restore research source mode + manual URLs
         if (r.manualUrls) manualUrls.value = r.manualUrls;
+
+        // Pulihkan isian tab Download
+        const setVal = (id, v) => { const e = document.getElementById(id); if (e && v != null) e.value = v; };
+        setVal('dlIds', r.dlIds);
+        setVal('dlUrl', r.dlUrl);
+        setVal('dlCount', r.dlCount);
+        setVal('dlSort', r.dlSort);
+        setVal('dlKind', r.dlKind);
+        setVal('dlQuality', r.dlQuality);
+        const src = r.dlSource || 'channel';
+        const radio = document.querySelector(`input[name="dlSource"][value="${src}"]`);
+        if (radio) radio.checked = true;
+        applyDlSource(src);
         const srcMode = r.researchSourceMode || 'niche';
         const srcRadio = document.querySelector(`input[name="researchMode"][value="${srcMode}"]`);
         if (srcRadio) srcRadio.checked = true;

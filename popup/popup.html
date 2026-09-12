@@ -28,7 +28,11 @@
         <button class="mode-tab active" data-mode="deepdive" id="tabDeepdive">Reseach Competitor</button>
         <button class="mode-tab" data-mode="research" id="tabResearch">Research Niche</button>
         <button class="mode-tab" data-mode="transcript" id="tabTranscript">Transcript</button>
-        <button class="mode-tab" data-mode="download" id="tabDownload">Download</button>
+        <!-- Tab Download disembunyikan 12 Sep 2026: yt-dlp + Deno lebih andal.
+             y2mate tidak stabil (sempat mati total, lalu tombol Download tak
+             merespons). Kodenya sengaja DIPERTAHANKAN — hapus style di bawah
+             untuk menghidupkan lagi kalau yt-dlp buntu. -->
+        <button class="mode-tab" data-mode="download" id="tabDownload" style="display:none">Download</button>
     </div>
 
     <!-- Status Card (Ready / Done / Error) -->
@@ -223,25 +227,53 @@
     <!-- ===== MODE: DOWNLOAD VIDEO (y2mate) ===== -->
     <div class="settings-wrap" id="downloadWrap" style="display:none">
         <div class="settings-row">
-            <span class="settings-title">Channel URL</span>
+            <span class="settings-title">Sumber video</span>
         </div>
         <div class="filter-sub">
-            <input type="text" id="dlUrl" class="filter-input" style="width:100%"
-                   placeholder="https://youtube.com/@channel">
+            <div class="radio-group">
+                <label class="radio-label"><input type="radio" name="dlSource" value="channel" checked> Dari channel</label>
+                <label class="radio-label"><input type="radio" name="dlSource" value="ids"> Daftar ID</label>
+            </div>
         </div>
-        <div class="settings-row">
-            <span class="settings-title">Pilih video</span>
+
+        <!-- sumber: channel -->
+        <div id="dlChannelBlock">
+            <div class="settings-row">
+                <span class="settings-title">Channel URL</span>
+            </div>
+            <div class="filter-sub">
+                <input type="text" id="dlUrl" class="filter-input" style="width:100%"
+                       placeholder="https://youtube.com/@channel">
+            </div>
+            <div class="settings-row">
+                <span class="settings-title">Pilih video</span>
+            </div>
+            <div class="filter-sub">
+                <div class="filter-date-row">
+                    <select id="dlSort" class="filter-input" style="width:auto">
+                        <option value="popular">Popular</option>
+                        <option value="latest" selected>Latest</option>
+                        <option value="oldest">Oldest</option>
+                    </select>
+                    <input type="number" id="dlCount" min="1" max="100" value="5"
+                           class="filter-input" style="width:70px">
+                    <span class="filter-hint">video</span>
+                </div>
+            </div>
         </div>
-        <div class="filter-sub">
-            <div class="filter-date-row">
-                <select id="dlSort" class="filter-input" style="width:auto">
-                    <option value="popular">Popular</option>
-                    <option value="latest" selected>Latest</option>
-                    <option value="oldest">Oldest</option>
-                </select>
-                <input type="number" id="dlCount" min="1" max="100" value="5"
-                       class="filter-input" style="width:70px">
-                <span class="filter-hint">video</span>
+
+        <!-- sumber: daftar ID -->
+        <div id="dlIdsBlock" style="display:none">
+            <div class="settings-row">
+                <span class="settings-title">Video ID / URL</span>
+            </div>
+            <div class="filter-sub">
+                <textarea id="dlIds" class="filter-input" rows="5" style="width:100%;resize:vertical"
+                          placeholder="5lpKA72DQmo&#10;https://youtube.com/watch?v=OizVergac0k&#10;youtu.be/dEbltxw-VTQ"></textarea>
+                <div class="filter-hint" style="margin-top:6px">
+                    Satu per baris atau dipisah koma. Terima ID telanjang, URL penuh, dan youtu.be.
+                    Urutan unduh mengikuti urutan di sini.
+                </div>
             </div>
         </div>
         <div class="settings-row">
@@ -264,6 +296,18 @@
                 Audio: kualitas diabaikan, dipakai bitrate tertinggi.
             </div>
         </div>
+        <div class="filter-sub" style="margin-top:10px">
+            <div class="filter-date-row">
+                <button id="dlShowLog" class="filter-input" style="flex:1;cursor:pointer">
+                    Lihat log terakhir
+                </button>
+                <button id="dlCopyLog" class="filter-input" style="width:auto;cursor:pointer">
+                    Salin
+                </button>
+            </div>
+            <pre id="dlLog" style="display:none;max-height:220px;overflow:auto;margin-top:8px;
+                 font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word"></pre>
+        </div>
     </div>
 
 
@@ -272,7 +316,7 @@
     <div class="btn-group">
         <button class="btn btn-primary" id="startButton">
             <svg width="18" height="18" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5Z" fill="#fff"/></svg>
-            Start research
+            <span id="startLabel">Start research</span>
         </button>
         <button class="btn btn-danger" id="stopButton" disabled>
             <svg width="16" height="16" viewBox="0 0 24 24"><path d="M6 6h12v12H6V6Z" fill="#fff"/></svg>

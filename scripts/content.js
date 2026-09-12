@@ -1205,6 +1205,22 @@ async function runDownloadMode(cfg) {
     if (window.ytResearchDownloadRunning) return;
     window.ytResearchDownloadRunning = true;
     try {
+        // Sumber "ids": video sudah ditentukan user, tak perlu buka YouTube
+        // sama sekali — langsung serahkan ke background.
+        if (cfg.source === 'ids') {
+            const list = (cfg.ids || []).map(id => ({
+                videoUrl: `https://www.youtube.com/watch?v=${id}`,
+                title: id
+            }));
+            if (!list.length) {
+                chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+                return;
+            }
+            sendProgress('Mulai', `${list.length} video dari daftar ID`, 5);
+            chrome.runtime.sendMessage({ action: 'y2RunList', list, config: cfg });
+            return;
+        }
+
         const base = normalizeChannelUrl(cfg.url) || cfg.url.replace(/\/videos\/?$/, '');
         if (!base) {
             chrome.runtime.sendMessage({ action: 'scrapingJobDone' });

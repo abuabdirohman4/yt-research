@@ -20,6 +20,23 @@ const setScrapingState = async (isScraping, status, extra) => {
 
 const bgSleep = ms => new Promise(r => setTimeout(r, ms));
 
+const Y2_LOG_CAP = 300;
+
+/**
+ * Catat ke storage, bukan cuma console — service worker MV3 mati sendiri dan
+ * log console ikut hilang. Ini yang membuat kegagalan bisa ditelusuri setelah
+ * kejadian, tanpa harus menonton DevTools saat proses berjalan.
+ */
+async function y2log(msg) {
+    const time = new Date().toTimeString().slice(0, 8);
+    const line = `${time}  ${msg}`;
+    console.log('[Y2]', msg);
+    const { y2RunLog = [] } = await chrome.storage.local.get('y2RunLog');
+    y2RunLog.push(line);
+    if (y2RunLog.length > Y2_LOG_CAP) y2RunLog.splice(0, y2RunLog.length - Y2_LOG_CAP);
+    await chrome.storage.local.set({ y2RunLog });
+}
+
 function sendProgressBg(phase, detail, percent) {
     const data = { phase, detail, percent };
     chrome.storage.local.set({ lastProgress: data });
@@ -48,6 +65,7 @@ async function y2FindFrame(tabId) {
 /** Proses satu video sampai tombol Download diklik. */
 async function y2OneVideo(tabId, videoUrl, cfg) {
     // 1. buka halaman y2mate
+    await y2log(`  buka y2mate untuk ${videoUrl.slice(-11)}`);
     await chrome.tabs.update(tabId, { url: 'https://www.y2mate.in.net/convert/' });
     await bgSleep(3000);
 
@@ -57,7 +75,11 @@ async function y2OneVideo(tabId, videoUrl, cfg) {
         submitted = await askTab(tabId, { action: 'y2submit', videoUrl }, 0);
         if (!submitted) await bgSleep(1500);
     }
-    if (!submitted || !submitted.ok) return { ok: false, step: 'submit' };
+    if (!submitted || !submitted.ok) {
+        await y2log('  GAGAL: URL tak bisa ditempel / Start tak merespons');
+        return { ok: false, step: 'submit' };
+    }
+    await y2log('  URL ditempel, Start diklik');
 
     // 3. tunggu iframe widget muncul (halaman bernavigasi setelah Start)
     let frameId = null;
@@ -65,17 +87,99 @@ async function y2OneVideo(tabId, videoUrl, cfg) {
         await bgSleep(800);
         frameId = await y2FindFrame(tabId);
     }
-    if (frameId === null) return { ok: false, step: 'frame' };
+    if (frameId === null) {
+        await y2log('  GAGAL: iframe konversi tak muncul (y2mate bermasalah?)');
+        return { ok: false, step: 'frame' };
+    }
+    await y2log(`  iframe siap (frameId ${frameId})`);
 
-    // 4. di dalam iframe: pilih jenis + kualitas, lalu klik Download
-    await bgSleep(1200);
-    const res = await askTab(tabId, {
-        action: 'y2download',
-        kind: cfg.kind || 'video',
-        quality: cfg.quality || '720p'
-    }, frameId);
+    // 4. di dalam iframe: pilih jenis + kualitas, lalu klik Download.
+    // askTab bisa mengembalikan null kalau iframe belum siap menerima pesan —
+    // dulu itu langsung dianggap selesai, sehingga loop melompat ke video
+    // berikutnya dalam hitungan detik. Sekarang dicoba ulang beberapa kali.
+    let res = null;
+    for (let i = 0; i < 4 && !res; i++) {
+        await bgSleep(1500);
+        res = await askTab(tabId, {
+            action: 'y2download',
+            kind: cfg.kind || 'video',
+            quality: cfg.quality || '720p'
+        }, frameId);
+    }
+    if (!res) {
+        await y2log('  GAGAL: iframe tak menjawab setelah 4 percobaan');
+        return { ok: false, step: 'iframe-nomsg' };
+    }
+    if (!res.ok) {
+        await y2log(`  GAGAL di langkah "${res.step}"${res.picked ? ` (pilih: ${res.picked})` : ''}`);
+        return res;
+    }
+    await y2log(`  tombol Download diklik${res.picked ? ` — ${res.picked}` : ''}`);
 
-    return res || { ok: false, step: 'iframe-nomsg' };
+    // 5. Klik saja tidak membuktikan apa pun — tunggu unduhan benar-benar
+    // TERDAFTAR di Chrome. Tanpa ini, video yang gagal terlihat sukses.
+    const started = await y2WaitDownloadStart(30000);
+    await y2log(started
+        ? '  unduhan MULAI (terdaftar di Chrome)'
+        : '  GAGAL: tak ada unduhan terdaftar dalam 30 detik');
+    return { ...res, ok: started, step: started ? 'done' : 'no-download' };
+}
+
+/**
+ * Tunggu sampai ada unduhan baru terdaftar di Chrome (bukan sekadar tombol
+ * diklik). Mengembalikan true kalau unduhan muncul dalam batas waktu.
+ */
+function y2WaitDownloadStart(timeoutMs) {
+    return new Promise(resolve => {
+        let selesai = false;
+        const beres = (v) => {
+            if (selesai) return;
+            selesai = true;
+            chrome.downloads.onCreated.removeListener(onNew);
+            clearTimeout(timer);
+            resolve(v);
+        };
+        const onNew = () => beres(true);
+        const timer = setTimeout(() => beres(false), timeoutMs);
+        chrome.downloads.onCreated.addListener(onNew);
+    });
+}
+
+/**
+ * Tunggu unduhan MAPAN, bukan selesai.
+ *
+ * Menunggu file 300 MB tuntas sebelum video berikutnya membuang waktu percuma —
+ * Chrome sanggup menyelesaikannya sendiri di latar belakang. Yang berbahaya
+ * hanya berpindah halaman SEBELUM unduhan benar-benar mengalir, karena
+ * unduhan yang dipicu lewat navigasi bisa ikut batal.
+ *
+ * Mapan = byte yang diterima sudah bertambah antar pemeriksaan, atau
+ * unduhannya memang sudah selesai.
+ */
+async function y2WaitDownloadsSettled(timeoutMs = 25000) {
+    const until = Date.now() + timeoutMs;
+    let sebelumnya = -1;
+    while (Date.now() < until) {
+        const aktif = await chrome.downloads.search({ state: 'in_progress' });
+        if (!aktif.length) return true;                 // sudah selesai/tak ada
+        const byte = aktif.reduce((n, d) => n + (d.bytesReceived || 0), 0);
+        if (byte > 0 && byte === sebelumnya) return true;  // sempat diam = sudah mengalir
+        if (byte > 1024 * 1024) return true;               // >1 MB masuk = aman ditinggal
+        sebelumnya = byte;
+        await bgSleep(1500);
+    }
+    return false;
+}
+
+/** Tunggu semua unduhan benar-benar tuntas (dipakai di akhir daftar saja). */
+async function y2WaitDownloadsIdle(timeoutMs) {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+        const aktif = await chrome.downloads.search({ state: 'in_progress' });
+        if (!aktif.length) return true;
+        await bgSleep(2000);
+    }
+    return false;
 }
 
 function injectToTab(tabId, command) {
@@ -224,6 +328,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Satu video = satu siklus: buka y2mate -> tempel URL -> tunggu iframe ->
     // pilih jenis+kualitas -> klik Download. Diorkestrasi di sini karena
     // butuh berpindah halaman, yang menghapus state content script.
+    else if (request.action === 'y2log') {
+        y2log(request.msg);
+        return false;
+    }
+
     else if (request.action === 'y2RunList') {
         chrome.storage.local.get(['scrapingTabId'], async (r) => {
             const tabId = r.scrapingTabId;
@@ -231,25 +340,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const cfg = request.config || {};
             let ok = 0, gagal = 0;
 
+            await chrome.storage.local.set({ y2RunLog: [] });   // mulai bersih
+            await y2log(`=== Mulai: ${list.length} video, ${cfg.kind || 'video'} ${cfg.quality || '720p'} ===`);
+
             for (let i = 0; i < list.length; i++) {
                 const v = list[i];
                 const label = (v.title || v.videoUrl || '').slice(0, 44);
+                await y2log(`[${i + 1}/${list.length}] ${label}`);
                 sendProgressBg(`Video ${i + 1}/${list.length}`, label,
                     Math.round((i / list.length) * 100));
 
                 const res = await y2OneVideo(tabId, v.videoUrl, cfg).catch(e => ({
                     ok: false, step: 'exception', error: String(e).slice(0, 80)
                 }));
-                if (res && res.ok) ok++; else {
-                    gagal++;
-                    console.warn('[Y2] gagal', label, res);
+                if (res && res.ok) { ok++; await y2log(`  OK`); }
+                else { gagal++; await y2log(`  -> dilewati (${res?.step || 'tak diketahui'})`); }
+                // Unduhan sebelumnya masih menulis ke disk; berpindah halaman
+                // saat itu bisa membatalkannya. Tunggu sampai reda dulu.
+                if (i < list.length - 1) {
+                    // Cukup pastikan unduhan sudah mengalir; sisanya diurus
+                    // Chrome di latar belakang sementara kita lanjut.
+                    await y2WaitDownloadsSettled(25000);
+                    await bgSleep(cfg.delay || 3000);
                 }
-                // Jeda antar video: unduhan sebelumnya masih menulis ke disk,
-                // dan y2mate membatasi permintaan beruntun.
-                if (i < list.length - 1) await bgSleep(cfg.delay || 3000);
             }
 
-            setScrapingState(false, `Selesai — ${ok} terunduh, ${gagal} gagal.`);
+            // Jangan tahan status sampai semua file tuntas — beri tahu saja
+            // kalau masih ada yang berjalan di latar belakang.
+            await y2WaitDownloadsSettled(20000);
+            const sisa = await chrome.downloads.search({ state: 'in_progress' });
+            const catatan = sisa.length ? ` (${sisa.length} masih mengunduh)` : '';
+            await y2log(`=== Selesai: ${ok} berhasil, ${gagal} gagal${catatan} ===`);
+            setScrapingState(false, `Selesai — ${ok} terunduh, ${gagal} gagal.${catatan}`);
             chrome.storage.local.set({ lastProgress: null });
             if (tabId) chrome.tabs.update(tabId, { url: 'https://www.youtube.com/' });
         });

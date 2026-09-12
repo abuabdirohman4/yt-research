@@ -21,6 +21,12 @@ const Y2 = {
 
 const y2sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/** Teruskan catatan ke background agar tersimpan di satu tempat. */
+function y2note(msg) {
+    console.log('[Y2:frame]', msg);
+    try { chrome.runtime.sendMessage({ action: 'y2log', msg: `    ${msg}` }); } catch (e) {}
+}
+
 /** Tunggu sampai fn() mengembalikan nilai truthy, atau menyerah. */
 async function y2waitFor(fn, timeoutMs = 20000, stepMs = 400) {
     const until = Date.now() + timeoutMs;
@@ -72,9 +78,10 @@ async function y2pickKind(kind) {
         [...document.querySelectorAll('a,button,li,div,span')]
             .find(e => e.textContent.trim().toLowerCase() === want
                 && e.offsetParent !== null), 20000);
-    if (!tab) return false;
+    if (!tab) { y2note(`tab "${want}" tak ketemu`); return false; }
     tab.click();
     await y2sleep(1200);
+    y2note(`tab "${want}" diklik`);
     return true;
 }
 
@@ -88,7 +95,7 @@ async function y2pickQuality(quality) {
             .filter(tr => tr.querySelector('a,button'));
         return r.length ? r : null;
     }, 20000);
-    if (!rows) return null;
+    if (!rows) { y2note('tabel kualitas tak muncul'); return null; }
 
     const num = s => { const m = String(s).match(/(\d+)/); return m ? +m[1] : null; };
     const want = num(quality);
@@ -104,11 +111,12 @@ async function y2pickQuality(quality) {
             .sort((a, b) => b.n - a.n);
         pick = (scored.find(x => x.n <= want) || scored[scored.length - 1])?.tr;
     }
-    if (!pick) return null;
+    if (!pick) { y2note(`kualitas ${quality} tak ada di daftar`); return null; }
 
     const btn = pick.querySelector('a,button');
-    if (!btn) return null;
+    if (!btn) { y2note('baris kualitas tanpa tombol'); return null; }
     btn.click();
+    y2note(`baris dipilih: ${pick.innerText.replace(/\s+/g, ' ').trim().slice(0, 24)}`);
     return pick.innerText.replace(/\s+/g, ' ').trim().slice(0, 30);
 }
 
@@ -118,16 +126,45 @@ async function y2pickQuality(quality) {
  * bisa diklik, bukan jeda tetap.
  */
 async function y2clickDownload() {
+    // Pop-up muncul lebih dulu dalam keadaan MEMUAT: kerangka abu-abu, judul
+    // kosong, dan tombolnya sudah ada di DOM tapi belum berfungsi. Mengklik di
+    // fase itu tidak memulai unduhan apa pun — inilah sebab video terlewat.
+    // Penanda benar-benar siap: judul pop-up sudah terisi DAN tombol punya href
+    // sungguhan (bukan '#'), atau teks pendamping "Wait ... start download".
     const btn = await y2waitFor(() => {
+        // PENTING: halaman punya 6 tombol bertulisan "Download" — lima di antaranya
+        // adalah tombol BARIS TABEL (1080p, 720p, ...). Mengambil yang pertama
+        // cocok berarti mengklik ulang baris resolusi, pop-up terbuka lagi, dan
+        // unduhan tidak pernah mulai. Tombol pop-up dikenali dari: TIDAK berada
+        // di dalam <table>.
         const cands = [...document.querySelectorAll('a,button')]
             .filter(e => /^\s*download\s*$/i.test(e.textContent || '')
-                && e.offsetParent !== null);
-        // abaikan tautan navigasi footer ("YouTube Downloader" dll)
-        return cands.find(e => !/youtube|converter|mp3/i.test(e.textContent || ''))
-            || null;
-    }, 30000);
-    if (!btn) return false;
+                && e.offsetParent !== null
+                && !/youtube|converter|mp3/i.test(e.textContent || '')
+                && !e.closest('table'));
+        if (!cands.length) return null;
+
+        // Pop-up bisa muncul lebih dulu sebagai kerangka kosong; tunggu isinya.
+        const siap = cands.find(e => {
+            const href = e.getAttribute('href');
+            if (href && href !== '#' && !/^javascript:/i.test(href)) return true;
+            const modal = e.closest('.modal, [role="dialog"], div');
+            const teks = (modal?.innerText || '').trim();
+            return teks.length > 40;
+        });
+        return siap || cands[cands.length - 1] || null;
+    }, 45000);
+
+    if (!btn) {
+        y2note('tombol Download di pop-up tak muncul dalam 45 detik');
+        return false;
+    }
+    y2note('tombol Download pop-up ditemukan');
+
+    // Setelah diklik, unduhan dimulai lewat navigasi/anchor. Beri jeda singkat
+    // supaya permintaan sempat terkirim sebelum halaman ditinggalkan.
     btn.click();
+    await y2sleep(2500);
     return true;
 }
 
