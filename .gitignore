@@ -1,2 +1,6 @@
 .DS_Store
 log_*
+
+# Izin Claude Code khusus mesin ini (berisi path absolut + nama MCP lokal).
+# settings.json TETAP ikut repo; yang .local jangan.
+.claude/settings.local.json
