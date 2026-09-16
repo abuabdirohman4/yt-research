@@ -1,5 +1,11 @@
 // ===================== HELPERS =====================
 
+// Log ke background supaya tercatat di storage — console content script
+// hilang tiap navigasi antar video.
+function ytlog(msg) {
+    try { chrome.runtime.sendMessage({ action: 'ytlog', msg }); } catch (e) { /* konteks mati */ }
+}
+
 function getPageType() {
     const url = window.location.href;
     const urlObj = new URL(url);
@@ -20,6 +26,9 @@ function getPageType() {
     const isYouTubeHome = /youtube\.com\/?(?:[?#]|$)/.test(url);
 
     if (isSearch) return 'search-results';
+    // Halaman playlist: ada list= tanpa v=. Dicek SEBELUM yang lain karena
+    // URL-nya tidak cocok pola channel mana pun dan akan jatuh ke 'other'.
+    if (/[?&]list=/.test(url) && !/[?&]v=/.test(url)) return 'playlist';
     if (isChannelVideos) {
         if (sort === 'p') return 'channel-videos-popular';
         if (sort === 'da') return 'channel-videos-oldest';
@@ -133,7 +142,10 @@ function sendProgress(countText, phase, pct, videosLeft) {
 // ===================== VIDEO ITEM PARSER =====================
 
 function parseVideoItems(limit) {
-    const items = document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer');
+    // yt-lockup-view-model dipakai halaman PLAYLIST; dua yang lain untuk
+    // halaman channel. Selector judul/link di dalamnya sama persis.
+    const items = document.querySelectorAll(
+        'ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model');
     const results = [];
     for (const item of items) {
         if (limit && results.length >= limit) break;
@@ -412,6 +424,18 @@ function buildSearchUrl(niche, suffix, dateFilter) {
     const q = encodeURIComponent(query).replace(/%20/g, '+');
     const sp = dateFilter || DEFAULT_DATE_FILTER;
     return `https://www.youtube.com/results?search_query=${q}&sp=${sp}`;
+}
+
+/** URL ini playlist? (list= tanpa v=, atau /playlist?list=) */
+function isPlaylistUrl(href) {
+    if (!href) return false;
+    return /[?&]list=/.test(href) && !/[?&]v=/.test(href);
+}
+
+/** Ambil URL playlist bersih dari apa pun yang ditempel user. */
+function normalizePlaylistUrl(href) {
+    const m = (href || '').match(/[?&]list=([A-Za-z0-9_-]+)/);
+    return m ? `https://www.youtube.com/playlist?list=${m[1]}` : null;
 }
 
 function normalizeChannelUrl(href) {
@@ -1119,16 +1143,43 @@ const TR_SORT_CHIP = { popular: 'Popular', oldest: 'Oldest', latest: 'Latest' };
 
 async function runTranscriptMode(cfg) {
     if (window.ytResearchTranscriptRunning) return;
+    ytlog(`Transcript mulai · sumber=${cfg.source || 'channel'} · sort=${cfg.sort || '-'} · url=${(cfg.url || '(kosong)').slice(0, 80)}`);
     window.ytResearchTranscriptRunning = true;
     try {
-        const base = normalizeChannelUrl(cfg.url) || cfg.url.replace(/\/videos\/?$/, '');
+        // Sumber "ids": video sudah ditentukan user (sering cuma satu). Tak perlu
+        // buka halaman channel sama sekali — langsung ke video pertama.
+        if (cfg.source === 'ids') {
+            const list = (cfg.ids || []).map(id => ({
+                videoUrl: `https://www.youtube.com/watch?v=${id}`,
+                title: id,
+            }));
+            if (!list.length) {
+                chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+                return;
+            }
+            await chrome.storage.local.set({
+                transcriptConfig: cfg, transcriptPhase: 'video',
+                transcriptList: list, transcriptIndex: 0, transcriptData: [],
+                transcriptChannel: '',
+            });
+            ytlog(`  mode ids: ${list.length} video · id[0]=${list[0].videoUrl.slice(-11)}`);
+            sendProgress('Video 1/' + list.length, 'Membuka video…', 10);
+            chrome.runtime.sendMessage({ action: 'navigateTo', url: list[0].videoUrl });
+            return;
+        }
+
+        // Playlist: buka halamannya apa adanya. Menambah "/videos" seperti pada
+        // channel justru membuat URL tidak valid.
+        const isPl = isPlaylistUrl(cfg.url);
+        const base = isPl
+            ? normalizePlaylistUrl(cfg.url)
+            : (normalizeChannelUrl(cfg.url) || cfg.url.replace(/\/videos\/?$/, ''));
         if (!base) {
-            console.error('[YTResearch] URL channel tidak valid');
+            console.error('[YTResearch] URL channel/playlist tidak valid');
             chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
             return;
         }
-        const sort = cfg.sort || 'latest';
-        const target = base + '/videos';
+        const target = isPl ? base : base + '/videos';
         await chrome.storage.local.set({
             transcriptConfig: cfg, transcriptPhase: 'list',
             transcriptList: [], transcriptIndex: 0, transcriptData: [],
@@ -1261,6 +1312,45 @@ async function transcriptCollectList(state) {
     const sort = cfg.sort || 'latest';
     const want = parseInt(cfg.count, 10) || 10;
 
+    // PLAYLIST: tidak punya chip Popular/Latest/Oldest, dan urutannya sudah
+    // ditentukan pemilik playlist. Menunggu chip di sini berarti menunggu
+    // sesuatu yang tak akan pernah muncul.
+    if (isPlaylistUrl(location.href)) {
+        let prev = 0, stalled = 0;
+        for (let i = 0; i < 40; i++) {
+            const n = document.querySelectorAll(
+                'yt-lockup-view-model, ytd-playlist-video-renderer').length;
+            if (n >= want) break;
+            if (n === prev) { if (++stalled >= 3) break; }
+            else { stalled = 0; prev = n; }
+            window.scrollTo(0, document.body.scrollHeight);
+            sendProgress('Memuat playlist', `${n} video…`, Math.min(10 + i * 2, 30));
+            await sleep(1500);
+        }
+
+        const all = parseVideoItems(0);
+        const list = all.slice(0, want);
+        if (!list.length) {
+            chrome.runtime.sendMessage({ action: 'scrapingJobDone' });
+            return;
+        }
+        // Nama playlist dipakai untuk menamai file hasil.
+        const plName = (
+            document.querySelector('yt-dynamic-sizing-view-model h1')
+            || document.querySelector('#title yt-formatted-string')
+            || document.querySelector('h1')
+        )?.textContent?.trim() || '';
+
+        ytlog(`  playlist "${plName || '(nama kosong)'}" · ${list.length} dari ${all.length} video`);
+        await chrome.storage.local.set({
+            transcriptList: list, transcriptIndex: 0, transcriptPhase: 'video',
+            transcriptChannel: plName,
+        });
+        sendProgress('Step 2', `Video 1/${list.length}: memuat…`, 35);
+        chrome.runtime.sendMessage({ action: 'navigateTo', url: list[0].videoUrl });
+        return;
+    }
+
     // Chip lebih andal daripada ?sort= — YouTube SPA sering membuang parameter URL.
     const titlesNow = () => [...document.querySelectorAll('ytd-rich-item-renderer')]
         .map(it => (it.querySelector('h3.ytLockupMetadataViewModelHeadingReset')?.getAttribute('title') || ''))
@@ -1325,6 +1415,7 @@ async function transcriptCollectList(state) {
         || ''
     ).trim();
 
+    ytlog(`  channel "${channelName || '(nama kosong)'}" · ${list.length} dari ${all.length} video`);
     await chrome.storage.local.set({
         transcriptList: list, transcriptIndex: 0, transcriptPhase: 'video',
         transcriptChannel: channelName
@@ -1353,13 +1444,19 @@ async function transcriptScrapeOne(state) {
             ?.textContent?.trim() || '';
         if (exactTitle) break;
     }
-    if (!exactTitle) exactTitle = v.title || '';
+    if (!exactTitle) {
+        exactTitle = v.title || '';
+        ytlog(`  video ${idx + 1}: judul dari DOM KOSONG, pakai fallback "${exactTitle}"`);
+    } else {
+        ytlog(`  video ${idx + 1}: judul "${exactTitle.slice(0, 60)}"`);
+    }
     let text = '';
     try {
         text = await scrapeTranscript();
     } catch (e) {
         console.warn('[YTResearch] transcript gagal', e);
     }
+    ytlog(`  video ${idx + 1}: transcript ${text ? text.length + ' karakter' : 'TIDAK ADA'}`);
     if (text && cfg.timestamps === false) {
         text = text.replace(/\[\d+:\d+(?::\d+)?\]\s*/g, '');
     }
@@ -1368,6 +1465,18 @@ async function transcriptScrapeOne(state) {
         videoUrl: v.videoUrl,
         transcript: text || '[TIDAK ADA TRANSCRIPT]'
     });
+
+    // Mode "video tertentu" tidak pernah membuka halaman channel, jadi nama
+    // channel diambil dari halaman video ini — kalau tidak, semua file hasil
+    // bernama "channel_all_transcripts.txt" dan saling bertabrakan.
+    if (!state.transcriptChannel) {
+        const ch = (
+            document.querySelector('ytd-video-owner-renderer ytd-channel-name a')
+            || document.querySelector('ytd-channel-name#channel-name a')
+            || document.querySelector('#owner #channel-name a')
+        )?.textContent?.trim();
+        if (ch) await chrome.storage.local.set({ transcriptChannel: ch });
+    }
 
     const next = idx + 1;
     if (next >= list.length) {
@@ -1497,7 +1606,8 @@ if (!window.ytResearchLoaded) {
 
         if (mode === 'transcript') {
             const tp = state.transcriptPhase;
-            if (tp === 'list' && pageType && pageType.startsWith('channel-videos')) {
+            if (tp === 'list' && pageType
+                && (pageType.startsWith('channel-videos') || pageType === 'playlist')) {
                 transcriptCollectList(state);
             } else if (tp === 'video' && pageType === 'watch') {
                 transcriptScrapeOne(state);

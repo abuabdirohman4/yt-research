@@ -27,15 +27,53 @@ const Y2_LOG_CAP = 300;
  * log console ikut hilang. Ini yang membuat kegagalan bisa ditelusuri setelah
  * kejadian, tanpa harus menonton DevTools saat proses berjalan.
  */
-async function y2log(msg) {
+// Chrome mengabaikan `filename` pada chrome.downloads.download() ketika url-nya
+// skema data: — file mendarat sebagai "download.txt". Listener ini yang
+// benar-benar menentukan namanya.
+// Antrian nama yang menunggu. onDeterminingFilename bisa menyala SEBELUM
+// callback download() mengembalikan id, jadi pencocokan lewat id tidak aman —
+// pakai antrian FIFO, dan unduhan kita selalu satu per satu.
+const antrianNama = [];
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    if (!antrianNama.length) return false;   // bukan unduhan kita
+    suggest({ filename: antrianNama.shift(), conflictAction: 'uniquify' });
+    return true;
+});
+
+/** Unduh teks/CSV dengan nama yang dijamin terpakai. */
+function unduhTeks(dataUrl, filename) {
+    antrianNama.push(filename);
+    chrome.downloads.download({ url: dataUrl, saveAs: false }, (id) => {
+        if (chrome.runtime.lastError || id === undefined) {
+            const i = antrianNama.indexOf(filename);
+            if (i >= 0) antrianNama.splice(i, 1);
+            ytLog(`  GAGAL simpan: ${chrome.runtime.lastError?.message || 'tanpa id'}`);
+        } else {
+            ytLog(`  tersimpan sebagai ${filename} (id ${id})`);
+        }
+    });
+}
+
+let ytLogChain = Promise.resolve();
+
+function ytLog(msg) {
     const time = new Date().toTimeString().slice(0, 8);
     const line = `${time}  ${msg}`;
-    console.log('[Y2]', msg);
-    const { y2RunLog = [] } = await chrome.storage.local.get('y2RunLog');
-    y2RunLog.push(line);
-    if (y2RunLog.length > Y2_LOG_CAP) y2RunLog.splice(0, y2RunLog.length - Y2_LOG_CAP);
-    await chrome.storage.local.set({ y2RunLog });
+    console.log('[YTR]', msg);
+    // Dirantai: baca-ubah-tulis storage tanpa antrian saling menimpa kalau dua
+    // log datang berdekatan, dan baris hilang diam-diam.
+    ytLogChain = ytLogChain.then(async () => {
+        const { y2RunLog = [] } = await chrome.storage.local.get('y2RunLog');
+        y2RunLog.push(line);
+        if (y2RunLog.length > Y2_LOG_CAP) y2RunLog.splice(0, y2RunLog.length - Y2_LOG_CAP);
+        await chrome.storage.local.set({ y2RunLog });
+    }).catch(() => { /* storage tak tersedia: log bukan alasan alur berhenti */ });
+    return ytLogChain;
 }
+
+// Nama lama, dipakai alur y2mate. Sekarang log dipakai SEMUA mode.
+const y2log = ytLog;
 
 function sendProgressBg(phase, detail, percent) {
     const data = { phase, detail, percent };
@@ -205,6 +243,8 @@ function injectToTab(tabId, command) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'startScraping') {
+        chrome.storage.local.set({ y2RunLog: [] });
+        ytLog(`=== MULAI mode "${request.mode}" ===`);
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             const tabId = tabs[0]?.id;
             if (!tabId) {
@@ -272,7 +312,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (rows.length > 0) {
                     const csv = generateNicheCSV(rows);
                     const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-                    chrome.downloads.download({ url: dataUrl, filename: `yt-niche-research_partial_${Date.now()}.csv`, saveAs: false });
+                    ytLog(`Niche DIHENTIKAN: ${rows.length} channel tersimpan`);
+                    unduhTeks(dataUrl, `yt-niche-research_partial_${Date.now()}.csv`);
                     setScrapingState(false, `Stopped. ${rows.length} channels exported.`);
                 } else {
                     setScrapingState(false, 'Stopped. (no data yet)');
@@ -285,6 +326,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
         });
         sendResponse({ success: true });
+    }
+
+    else if (request.action === 'ytlog') {
+        ytLog(request.msg);
+        return false;
     }
 
     else if (request.action === 'updateProgress') {
@@ -381,26 +427,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     else if (request.action === 'transcriptJobDone') {
         chrome.storage.local.get(['transcriptData', 'transcriptConfig', 'transcriptChannel'], (r) => {
             chrome.storage.local.set({ lastProgress: null });
+            ytLog(`=== Transcript selesai: ${(r.transcriptData || []).length} video ===`);
+            ytLog(`  channel/playlist: ${r.transcriptChannel || '(kosong)'}`);
             const data = r.transcriptData || [];
             const ok = data.filter(d => d.transcript && !d.transcript.startsWith('[TIDAK ADA')).length;
 
             if (data.length > 0) {
                 const txt = generateTranscriptTxt(data, r.transcriptConfig || {});
                 const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(txt);
-                // Pola nama mengikuti yt-transcript (yt-toolkit): buang karakter
-                // non-alfanumerik, spasi jadi underscore.
-                const safe = (r.transcriptChannel || 'channel')
-                    .toLowerCase()
-                    .replace(/[^\w\s-]/g, '')
-                    .trim()
-                    .replace(/[\s-]+/g, '_')     // spasi & tanda hubung -> underscore
-                    .replace(/_+/g, '_')          // rapatkan underscore beruntun
-                    .replace(/^_|_$/g, '') || 'channel';
-                chrome.downloads.download({
-                    url: dataUrl,
-                    filename: `${safe}_all_transcripts.txt`,
-                    saveAs: false
-                });
+
+                // SATU video -> pakai judul videonya; nama channel tidak cukup
+                // membedakan kalau beberapa video diambil satu per satu.
+                // BANYAK video -> pakai nama channel + cakupan.
+                const cfg = r.transcriptConfig || {};
+                let filename;
+                if (data.length === 1) {
+                    filename = `${snakeName(data[0].title, 'transcript')}.txt`;
+                } else {
+                    const ch = snakeName(r.transcriptChannel, 'channel');
+                    const scope = cfg.source === 'ids'
+                        ? `${data.length}_video`
+                        : `${data.length}_${cfg.sort || 'latest'}`;
+                    filename = `transcripts_${scope}_${ch}.txt`;
+                }
+
+                ytLog(`nama file: ${filename}`);
+                ytLog(`  ${data.length} video · judul[0]: ${(data[0] && data[0].title) || '(kosong)'}`);
+                unduhTeks(dataUrl, filename);
                 setScrapingState(false, `Done! ${ok}/${data.length} transcript.`);
             } else {
                 setScrapingState(false, 'Done! (tidak ada transcript)');
@@ -422,7 +475,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (rows.length > 0) {
                     const csv = generateNicheCSV(rows);
                     const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-                    chrome.downloads.download({ url: dataUrl, filename: `yt-niche-research_${Date.now()}.csv`, saveAs: false });
+                    ytLog(`Niche selesai: ${rows.length} channel dari ${nicheCount} niche`);
+                    unduhTeks(dataUrl, `yt-niche-research_${Date.now()}.csv`);
                     setScrapingState(false, `Done! ${rows.length} channels from ${nicheCount} niche${nicheCount > 1 ? 's' : ''}.`);
                 } else {
                     setScrapingState(false, 'Done! (no channels found)');
@@ -442,14 +496,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (opts.channelInfo && r.deepdiveChannelData && r.deepdiveChannelData.channelName) {
                 const csv = generateChannelInfoCSV(r.deepdiveChannelData);
                 const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-                chrome.downloads.download({ url: dataUrl, filename: `yt-channel-info_${ts}.csv`, saveAs: false });
+                ytLog(`Deep Dive: profil channel -> yt-channel-info_${ts}.csv`);
+                unduhTeks(dataUrl, `yt-channel-info_${ts}.csv`);
                 downloadCount++;
             }
 
             if (opts.videoData && r.deepdiveVideoData && r.deepdiveVideoData.length > 0) {
                 const csv = generateVideoDataCSV(r.deepdiveVideoData, opts);
                 const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-                chrome.downloads.download({ url: dataUrl, filename: `yt-video-data_${ts}.csv`, saveAs: false });
+                ytLog(`Deep Dive: ${(r.deepdiveVideoData || []).length} video -> yt-video-data_${ts}.csv`);
+                unduhTeks(dataUrl, `yt-video-data_${ts}.csv`);
                 downloadCount++;
             }
 
@@ -486,6 +542,22 @@ function escape(val) {
 
 // Format sama dengan yt-transcript (yt-toolkit) supaya file hasilnya bisa
 // langsung dipakai yt-slides tanpa konversi.
+/**
+ * Judul/nama -> snake_case lowercase, sesuai aturan vault second-brain §2.
+ * Semua tanda baca (strip, titik dua, tanda tanya, kurung) DIBUANG — pemisah
+ * kata cukup underscore.
+ */
+function snakeName(text, fallback = 'transcript', limit = 80) {
+    const s = (text || '')
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')     // buang tanda baca
+        .trim()
+        .replace(/[\s-]+/g, '_')       // spasi & strip -> underscore
+        .replace(/_+/g, '_')            // rapatkan underscore beruntun
+        .replace(/^_|_$/g, '');
+    return s.slice(0, limit).replace(/_$/, '') || fallback;
+}
+
 function generateTranscriptTxt(data, cfg) {
     const bar = '='.repeat(52);
     const dash = '-'.repeat(52);

@@ -74,6 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const FOOTER_TEXT = {
         research: 'Open any YouTube page, pick niches, then click Start. <br> Keep the tab active while scraping. Try 1–2 niches first.',
         deepdive: 'Open a YouTube channel page (/videos), then click Start. <br> Keep the tab active while scraping to get comment counts.',
+        transcript: 'Isi URL channel atau playlist, atau tempel URL/ID video tertentu. <br> Biarkan tab aktif selama proses berjalan.',
     };
 
     // ── Mode tabs ──
@@ -439,39 +440,77 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Panel log: dibaca dari storage, jadi tetap ada walau service worker
     // sudah mati dan popup ditutup-buka.
-    const dlShowLog = document.getElementById('dlShowLog');
-    const dlLog = document.getElementById('dlLog');
-    if (dlShowLog && dlLog) {
-        dlShowLog.addEventListener('click', () => {
-            const buka = dlLog.style.display === 'none';
-            dlLog.style.display = buka ? '' : 'none';
-            dlShowLog.textContent = buka ? 'Sembunyikan log' : 'Lihat log terakhir';
+    const ytShowLog = document.getElementById('ytShowLog');
+    const ytLogBox = document.getElementById('ytLogBox');
+    if (ytShowLog && ytLogBox) {
+        ytShowLog.addEventListener('click', () => {
+            const buka = ytLogBox.style.display === 'none';
+            ytLogBox.style.display = buka ? '' : 'none';
+            ytShowLog.textContent = buka ? 'Sembunyikan log' : 'Lihat log terakhir';
             if (!buka) return;
             chrome.storage.local.get('y2RunLog', (r) => {
                 const baris = r.y2RunLog || [];
-                dlLog.textContent = baris.length ? baris.join('\n') : '(belum ada log)';
-                dlLog.scrollTop = dlLog.scrollHeight;
+                ytLogBox.textContent = baris.length ? baris.join('\n') : '(belum ada log)';
+                ytLogBox.scrollTop = ytLogBox.scrollHeight;
             });
         });
     }
 
-    const dlCopyLog = document.getElementById('dlCopyLog');
-    if (dlCopyLog) {
-        dlCopyLog.addEventListener('click', () => {
+    const ytCopyLog = document.getElementById('ytCopyLog');
+    if (ytCopyLog) {
+        ytCopyLog.addEventListener('click', () => {
             chrome.storage.local.get('y2RunLog', async (r) => {
                 const teks = (r.y2RunLog || []).join('\n');
-                if (!teks) { dlCopyLog.textContent = 'Kosong'; }
+                if (!teks) { ytCopyLog.textContent = 'Kosong'; }
                 else {
                     try {
                         await navigator.clipboard.writeText(teks);
-                        dlCopyLog.textContent = 'Tersalin';
+                        ytCopyLog.textContent = 'Tersalin';
                     } catch (e) {
-                        dlCopyLog.textContent = 'Gagal';
+                        ytCopyLog.textContent = 'Gagal';
                     }
                 }
-                setTimeout(() => { dlCopyLog.textContent = 'Salin'; }, 1500);
+                setTimeout(() => { ytCopyLog.textContent = 'Salin'; }, 1500);
             });
         });
+    }
+
+    // Tab Transcript: blok channel vs video tertentu
+    function applyTrSource(v) {
+        const ids = v === 'ids';
+        document.getElementById('trChannelBlock').style.display = ids ? 'none' : '';
+        document.getElementById('trIdsBlock').style.display = ids ? '' : 'none';
+        if (!ids) applyTrUrlKind();
+    }
+
+    // Playlist tidak punya chip Popular/Latest/Oldest — urutannya milik pemilik
+    // playlist. Menampilkan pilihan urutan di situ menjanjikan yang tak ditepati.
+    function applyTrUrlKind() {
+        const url = (document.getElementById('trUrl')?.value || '').trim();
+        const playlist = /[?&]list=/.test(url) && !/[?&]v=/.test(url);
+        const sort = document.getElementById('trSort');
+        const hint = document.getElementById('trPlaylistHint');
+        if (sort) sort.style.display = playlist ? 'none' : '';
+        if (hint) hint.style.display = playlist ? '' : 'none';
+    }
+    document.querySelectorAll('input[name="trSource"]').forEach(r => {
+        r.addEventListener('change', () => {
+            if (!r.checked) return;
+            applyTrSource(r.value);
+            chrome.storage.local.set({ trSource: r.value });
+        });
+    });
+    [['trIds', 'trIds'], ['trUrl', 'trUrl'], ['trCount', 'trCount']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            chrome.storage.local.set({ [key]: el.value });
+            if (id === 'trUrl') applyTrUrlKind();
+        });
+    });
+    {
+        const el = document.getElementById('trSort');
+        if (el) el.addEventListener('change', () => chrome.storage.local.set({ trSort: el.value }));
     }
 
     // Blok channel vs daftar ID saling menggantikan
@@ -549,12 +588,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (activeMode === 'transcript') {
+            const trSrc = (document.querySelector('input[name="trSource"]:checked') || {}).value || 'channel';
+
+            if (trSrc === 'ids') {
+                const ids = parseVideoIds(document.getElementById('trIds').value);
+                if (!ids.length) {
+                    showStatusCard('Tidak ada video', 'Tempel minimal satu video ID atau URL', 'error', '#f59e0b');
+                    return;
+                }
+                const transcriptConfig = {
+                    source: 'ids',
+                    ids,
+                    timestamps: document.getElementById('trTimestamps').checked
+                };
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                resultsWrap.style.display = 'none';
+                showProgressCard('Starting…', `${ids.length} video`, 0);
+                chrome.runtime.sendMessage({ action: 'startScraping', mode: 'transcript', transcriptConfig }, () => {
+                    if (chrome.runtime.lastError) updateUI(false, 'Error: Failed to start');
+                });
+                return;
+            }
+
             const url = document.getElementById('trUrl').value.trim();
             if (!url) {
                 showStatusCard('No URL', 'Masukkan URL channel dulu', 'error', '#f59e0b');
                 return;
             }
             const transcriptConfig = {
+                source: 'channel',
                 url,
                 sort: document.getElementById('trSort').value,
                 count: parseInt(document.getElementById('trCount').value, 10) || 10,
@@ -661,7 +724,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Initial load ──
-    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter', 'researchSourceMode', 'manualUrls', 'dlSource', 'dlIds', 'dlUrl', 'dlCount', 'dlSort', 'dlKind', 'dlQuality'], (r) => {
+    chrome.storage.local.get(['activeMode', 'theme', 'deepdiveOptions', 'videoFilter', 'isScraping', 'status', 'researchResult', 'lastProgress', 'nicheSelection', 'nicheAllOptions', 'nicheChannelsPerNiche', 'nicheSuffix', 'nicheDateFilter', 'researchSourceMode', 'manualUrls', 'dlSource', 'dlIds', 'dlUrl', 'dlCount', 'dlSort', 'dlKind', 'dlQuality', 'trSource', 'trIds', 'trUrl', 'trCount', 'trSort'], (r) => {
         activeMode = r.activeMode || 'deepdive';
 
         applyTheme(r.theme || 'dark');
@@ -687,6 +750,15 @@ document.addEventListener('DOMContentLoaded', () => {
         setVal('dlSort', r.dlSort);
         setVal('dlKind', r.dlKind);
         setVal('dlQuality', r.dlQuality);
+        setVal('trIds', r.trIds);
+        setVal('trUrl', r.trUrl);
+        setVal('trCount', r.trCount);
+        setVal('trSort', r.trSort);
+        const trSrc = r.trSource || 'channel';
+        const trRadio = document.querySelector(`input[name="trSource"][value="${trSrc}"]`);
+        if (trRadio) trRadio.checked = true;
+        applyTrSource(trSrc);
+
         const src = r.dlSource || 'channel';
         const radio = document.querySelector(`input[name="dlSource"][value="${src}"]`);
         if (radio) radio.checked = true;
